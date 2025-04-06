@@ -1,55 +1,113 @@
+# Apply eventlet monkey patch before any other imports
 import eventlet
+
+eventlet.monkey_patch()
+
 import socketio
 
-MAX_SIZE = 1024
 
-socketIo = socketio.Server()
-app = socketio.WSGIApp(socketIo, static_files={
-    '/': {'content_type': 'text/html', 'filename': 'index.html'}
-})
+class Server:
+    # Default parameters
 
-@socketIo.event
-def connect(client_id, env):#client_id é o id do cliente
-    print('connect ', client_id)
-    print(f"PROTOCOL: {env['SERVER_PROTOCOL']}")
+    def __init__(self, host='', max_size=1024, operation_mode='text', port=5000):
+        # Server setup
+        self.host = host
+        self.port = port
+        self.operation_mode = operation_mode
+        self.max_size = max_size
 
-@socketIo.event
-def handshake(client_id, data):
-    """
-    Evento para processar o handshake inicial.
-    O cliente deve enviar um dicionário contendo:
-        - operation_mode: Ex.: 'texto' ou 'binário'
-        - max_size: Tamanho máximo em bytes que deseja utilizar
-    """
-    print(f"Handshake recebido do cliente {client_id}: {data}")
-    # Verifica se o parâmetro 'max_size' enviado pelo cliente não excede o permitido pelo servidor
-    client_max_size = data.get('max_size', MAX_SIZE)
-    if client_max_size > MAX_SIZE:
-        # Se exceder, envia resposta de erro
-        socketIo.emit('handshake_response',
-                      {'status': 'error', 'message': 'Tamanho máximo excedido'},
-                      room=client_id)
-        print(f"Handshake rejeitado para o cliente {client_id}: Tamanho máximo excedido")
-    else:
-        # Se os parâmetros estiverem corretos, envia confirmação
-        socketIo.emit('handshake_response',
-                      {'status': 'ok', 'message': 'SYN + ACK'},
-                      room=client_id)
-        print(f"Handshake aceito para o cliente {client_id}")
+        # Client connection tracking
+        self.client_sessions = {}
+        
+        # SocketIO setup
+        self.sio = socketio.Server(cors_allowed_origins='*')  # Add CORS support
+        self.app = socketio.WSGIApp(self.sio, static_files={
+            '/': {'content_type': 'text/html', 'filename': 'index.html'}
+        })
+        
+        # Register event handlers
+        self.register_handlers()
+    
+    def register_handlers(self):
+        """Register all event handlers with the SocketIO server"""
+        self.sio.on('connect', self.on_connect)
+        self.sio.on('disconnect', self.on_disconnect)
+        self.sio.on('SYN', self.on_syn)
+        self.sio.on('handshake_response', self.on_handshake_response)
+        self.sio.on('message', self.on_message)
+    
+    def on_connect(self, sid, environ):
+        """Handle client connection"""
+        print(f'Client connected: {sid}')
+        self.client_sessions[sid] = {
+            'connected': True,
+            'handshake_complete': False
+        }
+    
+    def on_syn(self, sid, data):
+        """Handle SYN request from client (Step 2 of handshake)"""
+        print(f'Received SYN from {sid}: {data}')
+        
+        # Validate connection parameters
+        operation_mode = data.get('operation_mode', self.operation_mode)
 
-@socketIo.event
-def my_message(client_id, data):
+        if operation_mode != 'text':
+            print(f'Invalid operation mode from {sid}: {operation_mode}')
+            return {
+                'status': 'error',
+                'message': 'Invalid operation mode'
+            }
 
-    if len(data) > MAX_SIZE:
-        print('message too big')
-        socketIo.emit('error_message',
-                      {'status': 'error', 'message': 'Mensagem excede o tamanho máximo'},
-                      room=client_id)
-        return
+        requested_max_size = data.get('max_size', self.max_size)
+        
+        # Apply server-side limits if needed
+        max_size = min(requested_max_size, self.max_size)
+        
+        # Store session parameters
+        self.client_sessions[sid].update({
+            'operation_mode': operation_mode,
+            'max_size': max_size
+        })
+        
+        # Return SYN-ACK with negotiated parameters
+        return {
+            'status': 'ok',
+            'operation_mode': operation_mode,
+            'max_size': max_size,
+            'message': 'SYN-ACK: Parameters accepted'
+        }
+    
+    def on_handshake_response(self, sid, data):
+        """Handle final ACK from client (Step 3 of handshake)"""
+        print(f'Received ACK from {sid}: {data}')
+        self.client_sessions[sid]['handshake_complete'] = True
+        print(f'Handshake completed for client {sid}')
+    
+    def on_message(self, sid, data):
+        # Check if handshake is complete
+        if not self.client_sessions.get(sid, {}).get('handshake_complete', False):
+            print(f'Rejected message from {sid}: Handshake not complete')
+            return
 
-@socketIo.event
-def disconnect(client_id):
-    print('disconnect ', client_id)
+        # Check message size
+        max_size = self.client_sessions[sid].get('max_size', self.max_size)
+        if isinstance(data, str) and len(data.encode()) > max_size:
+            print(f'Rejected message from {sid}: Size exceeds limit of {max_size} bytes')
+            return
+        
+        print(f'Received message from {sid}: {data}')
+        # Process message...
+    
+    def on_disconnect(self, sid):
+        print(f'Client disconnected: {sid}')
+        if sid in self.client_sessions:
+            del self.client_sessions[sid]
+    
+    def start(self):
+        print(f'Server starting on port {self.port}...')
+        eventlet.wsgi.server(eventlet.listen((self.host, self.port)), self.app)
+
 
 if __name__ == '__main__':
-    eventlet.wsgi.server(eventlet.listen(('', 5000)), app)
+    server = Server()
+    server.start()
