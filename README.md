@@ -1,223 +1,279 @@
-# Custom Network Protocol Implementation
+# Custom Network Protocol Documentation
 
-This project implements a custom client-server communication protocol built from scratch without relying on HTTP. The implementation uses raw sockets for communication and defines its own protocol rules for connection establishment, data transfer, and connection termination.
+This document provides a detailed explanation of how our custom protocol implementation works, including the handshake process, message exchange, and connection termination.
 
-## Libraries for Custom Protocol Implementation
+## Message Types
 
-For a truly from-scratch implementation without HTTP, we'll use:
+Our protocol defines specific message types to distinguish between different kinds of communication:
 
-1. **socket** - Python's built-in socket library for low-level network communication
-   - Provides direct access to the transport layer
-   - Allows complete control over packet creation and handling
-   - Example: `import socket`
+- `SYN_TYPE (0x01)`: Used to initiate a connection (first step of handshake)
+- `ACK_TYPE (0x02)`: Used for acknowledgments (server's response in handshake and message confirmations)
+- `ACK_FINAL (0x03)`: Final acknowledgment from client to complete handshake
+- `DATA_TYPE (0x04)`: Used for data exchange after the connection is established
+- `DISCONNECT_TYPE (0x05)`: Used to request connection termination
 
-2. **struct** - For binary data packing/unpacking to create custom packet formats
-   - Used to pack headers and message metadata into binary format
-   - Example: `import struct`
+## Packet Structure
 
-3. **threading/asyncio** - For handling multiple connections
-   - Manages concurrent client connections
-   - Example: `import threading` or `import asyncio`
+Every packet in our protocol has the following structure:
 
-4. **hashlib** - For generating checksums for error detection
-   - Creates message digests to verify data integrity
-   - Example: `import hashlib`
+```
++---------------+---------------+---------------+---------------+---------------+
+| Payload Length| Message Type  | Sequence Num  | Checksum      | Payload       |
+| (4 bytes)     | (1 byte)      | (2 bytes)     | (4 bytes)     | (variable)    |
++---------------+---------------+---------------+---------------+---------------+
+```
+
+- **Payload Length**: Size of the payload in bytes (allows dynamic message sizing)
+- **Message Type**: Type of message (SYN, ACK, DATA, etc.)
+- **Sequence Number**: Used for message ordering and reliability
+- **Checksum**: MD5 hash of the payload for error detection
+- **Payload**: The actual data being transmitted
+
+## Connection Establishment (Three-Way Handshake)
+
+### Step 1: Client SYN
+
+The client initiates a connection by sending a SYN packet to the server:
+
+```python
+# Client creates a socket and connects to the server
+self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+self.client_socket.connect((self.server_addr, self.server_port))
+
+# Client sends SYN with connection parameters
+syn_packet = self.create_packet(SYN_TYPE, json.dumps(self.connection_params))
+self.client_socket.sendall(syn_packet)
+```
+
+The payload contains a JSON object with connection parameters:
+- `operation_mode`: Step-by-step or burst mode
+- `max_size`: Maximum packet size the client can handle
+
+### Step 2: Server SYN-ACK
+
+Upon receiving a SYN, the server:
+1. Validates the client's parameters
+2. Generates a session ID
+3. Creates a session record
+4. Sends a SYN-ACK response
+
+```python
+def handle_syn(self, client_socket, client_address, data):
+    # Validate parameters
+    operation_mode = data.get('operation_mode', self.operation_mode)
+    requested_max_size = data.get('max_size', self.max_size)
+    max_size = min(requested_max_size, self.max_size)
+    
+    # Generate session ID
+    session_id = hashlib.md5(f"{client_address}{socket.gethostname()}".encode()).hexdigest()[:8]
+    
+    # Store session
+    self.client_sessions[client_address] = {
+        'operation_mode': operation_mode,
+        'max_size': max_size,
+        'session_id': session_id,
+        'handshake_complete': False,
+        'socket': client_socket
+    }
+    
+    # Send SYN-ACK
+    response = {
+        'status': 'ok',
+        'operation_mode': operation_mode,
+        'max_size': max_size,
+        'session_id': session_id,
+        'message': 'SYN-ACK: Parameters accepted'
+    }
+    
+    packet = self.create_packet(ACK_TYPE, json.dumps(response))
+    client_socket.sendall(packet)
+```
+
+### Step 3: Client ACK
+
+The client processes the SYN-ACK, stores the negotiated parameters, and sends the final ACK:
+
+```python
+# Client receives SYN-ACK
+parsed = self.parse_packet(response_packet)
+syn_ack_data = json.loads(parsed['payload'])
+
+# Store negotiated parameters
+self.session_id = syn_ack_data.get('session_id')
+self.connection_params['max_size'] = syn_ack_data.get('max_size')
+self.connection_params['operation_mode'] = syn_ack_data.get('operation_mode')
+
+# Send final ACK
+ack_data = {'session_id': self.session_id, 'message': 'Connection established'}
+ack_packet = self.create_packet(0x03, json.dumps(ack_data))
+self.client_socket.sendall(ack_packet)
+
+# Connection is established
+self.handshake_complete = True
+```
+
+## Data Exchange
+
+After the handshake is complete, the client and server can exchange data messages:
+
+### Client Sending Messages
+
+```python
+def send_message(self, message):
+    # Create data packet
+    data_packet = self.create_packet(DATA_TYPE, encoded_message)
+    self.client_socket.sendall(data_packet)
+    
+    # Wait for acknowledgment in step-by-step mode
+    if self.connection_params['operation_mode'] == 'step-by-step':
+        response_packet = self.client_socket.recv(1024)
+        parsed = self.parse_packet(response_packet)
+        if parsed and parsed['type'] == ACK_TYPE:
+            print("Message acknowledged by server")
+```
+
+### Server Handling Messages
+
+The server continuously listens for messages from connected clients:
+
+```python
+def handle_client_messages(self, client_socket, client_address):
+    while client_address in self.client_sessions:
+        # Receive header
+        header = client_socket.recv(11)
+        
+        # Parse header
+        payload_length, message_type, sequence_num, checksum = struct.unpack('!IBH4s', header)
+        
+        # Receive payload
+        payload = client_socket.recv(payload_length)
+        
+        # Handle based on message type
+        if message_type == DATA_TYPE:
+            self.handle_message(client_socket, client_address, payload)
+        elif message_type == DISCONNECT_TYPE:
+            self.handle_disconnect(client_socket, client_address)
+            break
+```
 
 ## Operation Modes
 
-The protocol supports two primary operation modes:
+The protocol supports two operation modes:
 
-### 1. Step-by-Step Mode
-- Each message requires acknowledgment before the next message is sent
-- Provides higher reliability with immediate confirmation
-- Suitable for critical data where every packet must be confirmed
-- Lower throughput but higher reliability
-- Implementation example:
-  ```python
-  # Client sends message
-  send_message(message)
-  # Client waits for acknowledgment before sending next message
-  ack = receive_acknowledgment()
-  if ack.status == "OK":
-      # Send next message
-  ```
+### Step-by-Step Mode
 
-### 2. Burst Mode
-- Multiple messages are sent in sequence without waiting for acknowledgments
-- Higher throughput but potentially lower reliability
-- Uses sliding window protocol with configurable window size
-- Suitable for applications requiring higher data transfer rates
-- Implementation example:
-  ```python
-  # Client sends multiple messages in sequence
-  for message in messages:
-      send_message(message)
-  # Client then processes acknowledgments
-  process_acknowledgments()
-  ```
+In this mode, each message requires an acknowledgment before the next message can be sent:
 
-## Protocol Specification
+1. Client sends a message
+2. Server acknowledges the message
+3. Client waits for acknowledgment before sending the next message
 
-### 1. Connection Establishment (Three-way Handshake)
+This provides higher reliability but lower throughput.
 
-Similar to TCP, our protocol uses a three-way handshake process:
+### Burst Mode
 
-1. **SYN**: Client sends connection request with parameters:
-   - `operation_mode`: The type of data transmission ("step-by-step" or "burst")
-   - `max_packet_size`: Maximum packet size the client can handle
-   - `client_id`: Unique identifier for the client (optional)
+In burst mode, multiple messages can be sent without waiting for acknowledgments:
 
-2. **SYN-ACK**: Server responds with:
-   - `status`: Indicates if connection parameters are accepted
-   - `session_id`: Unique session identifier
-   - `max_packet_size`: Server's maximum packet size (negotiated)
-   - `operation_mode`: Confirmed operation mode
-   - `window_size`: Number of messages in burst mode (if applicable)
+1. Client sends multiple messages in sequence
+2. Server processes each message and may send bulk acknowledgments
+3. Client can continue sending up to the window size limit
 
-3. **ACK**: Client acknowledges receipt of server parameters
+This provides higher throughput but potentially lower reliability.
 
-### 2. Message Format
+## Connection Termination
 
-Each message consists of a header and payload:
+Either the client or server can initiate connection termination:
 
-```
-+----------------+----------------+----------------+
-| Message Length | Message Type   | Payload        |
-| (4 bytes)      | (1 byte)       | (variable)     |
-+----------------+----------------+----------------+
-```
-
-Message Types:
-- `0x01`: Data message
-- `0x02`: Acknowledgment
-- `0x03`: Error
-- `0x04`: Keep-alive
-- `0x05`: Disconnect request
-
-### 3. Error Handling
-
-- Timeout: If no response is received within a defined timeout period, the message is resent
-- Checksum: Messages include a checksum for error detection
-- Sequence numbers: Messages include sequence numbers to detect lost messages
-
-### 4. Connection Termination
-
-1. Client sends disconnect request
-2. Server acknowledges and closes the connection
-3. Client confirms and closes the connection
-
-## Implementation
-
-### Client Implementation
-
-The client implementation includes:
-- Socket initialization
-- Connection establishment through the handshake process
-- Message sending with proper formatting
-- Response handling
-- Connection termination
-
-### Server Implementation
-
-The server implementation includes:
-- Socket binding and listening
-- Client connection acceptance
-- Handshake process handling
-- Message processing
-- Multiple client management
-- Connection termination handling
-
-## Usage
-
-### Starting the Server
-
-```bash
-python server.py [--host HOST] [--port PORT] [--max-size SIZE]
-```
-
-### Running the Client
-
-```bash
-python client.py [--server-addr ADDR] [--server-port PORT] [--operation-mode MODE]
-```
-
-## Example Communication Flow
-
-1. Client initiates connection:
-   ```
-   CLIENT -> SERVER: SYN {operation_mode: "burst", max_packet_size: 1024, window_size: 5}
-   ```
-
-2. Server accepts and responds:
-   ```
-   SERVER -> CLIENT: SYN-ACK {status: "ok", session_id: "abc123", max_packet_size: 1024, operation_mode: "burst", window_size: 5}
-   ```
-
-3. Client acknowledges:
-   ```
-   CLIENT -> SERVER: ACK {session_id: "abc123"}
-   ```
-
-4. Data exchange:
-   ```
-   CLIENT -> SERVER: {type: 0x01, length: 11, payload: "Hello World"}
-   SERVER -> CLIENT: {type: 0x02, sequence: 1}  # Acknowledgment
-   ```
-
-5. Connection termination:
-   ```
-   CLIENT -> SERVER: {type: 0x05}  # Disconnect request
-   SERVER -> CLIENT: {type: 0x02}  # Acknowledgment
-   ```
-
-## Implementation Details
-
-### Packet Structure Implementation
+### Client-Initiated Disconnect
 
 ```python
-def create_packet(message_type, payload, sequence_num=0):
-    """
-    Creates a packet with proper headers
+def disconnect(self):
+    # Send disconnect request
+    disconnect_packet = self.create_packet(DISCONNECT_TYPE, "Disconnect")
+    self.client_socket.sendall(disconnect_packet)
     
-    Args:
-        message_type (int): Type of message (1=data, 2=ack, etc.)
-        payload (bytes): Actual data
-        sequence_num (int): Sequence number for ordering
+    # Wait for acknowledgment
+    response_packet = self.client_socket.recv(1024)
+    
+    # Close socket
+    self.client_socket.close()
+    self.handshake_complete = False
+```
+
+### Server Handling Disconnect
+
+```python
+def handle_disconnect(self, client_socket, client_address):
+    # Send acknowledgment
+    ack_packet = self.create_packet(ACK_TYPE, "ACK")
+    client_socket.sendall(ack_packet)
+    
+    # Remove client session
+    del self.client_sessions[client_address]
+```
+
+## Error Handling
+
+The protocol includes multiple error handling mechanisms:
+
+1. **Checksums**: Each message includes an MD5 checksum of the payload for error detection
+2. **Timeouts**: Client and server can set timeouts for receiving responses
+3. **Sequence Numbers**: Used to detect out-of-order or missing messages
+
+## Packet Creation and Parsing
+
+The core functionality of creating and parsing packets is implemented in the NetworkDevice base class:
+
+### Packet Creation
+
+```python
+def create_packet(self, message_type, payload, sequence_num=0):
+    # Convert string to bytes if needed
+    if isinstance(payload, str):
+        payload = payload.encode('utf-8')
         
-    Returns:
-        bytes: Complete packet
-    """
     payload_length = len(payload)
-    checksum = hashlib.md5(payload).digest()[:4]  # 4-byte checksum
+    checksum = hashlib.md5(payload).digest()[:4]
     
-    # Pack header: length (4 bytes) + type (1 byte) + seq (2 bytes) + checksum (4 bytes)
+    # Pack header
     header = struct.pack('!IBH4s', payload_length, message_type, sequence_num, checksum)
     
-    # Complete packet = header + payload
+    # Return complete packet
     return header + payload
 ```
 
-### Socket Implementation Example
+### Packet Parsing
 
 ```python
-# Server socket creation
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server_socket.bind((host, port))
-server_socket.listen(5)
-
-# Client socket creation
-client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client_socket.connect((server_host, server_port))
+def parse_packet(self, packet):
+    # Extract header
+    header = packet[:11]
+    payload_length, message_type, sequence_num, checksum = struct.unpack('!IBH4s', header)
+    
+    # Extract payload
+    payload = packet[11:11+payload_length]
+    
+    # Verify checksum
+    calculated_checksum = hashlib.md5(payload).digest()[:4]
+    if calculated_checksum != checksum:
+        print("Checksum error!")
+        return None
+        
+    # Return parsed packet
+    return {
+        'type': message_type,
+        'sequence': sequence_num,
+        'payload': payload,
+        'length': payload_length
+    }
 ```
 
-## Limitations and Future Improvements
+## Summary Flow of Communication
 
-- Current implementation doesn't handle network congestion
-- No fragmentation/reassembly for large messages
-- Limited error recovery mechanisms
-- Could add encryption for secure communication
-- Could implement reliability features like message reordering
+1. **Client connects to server**
+2. **Three-way handshake**: SYN → SYN-ACK → ACK
+3. **Data exchange**: Client sends DATA, server responds with ACK
+4. **Connection termination**: Client sends DISCONNECT, server acknowledges
+5. **Socket closure**: Both client and server close their sockets
 
-## Contributing
-
-Feel free to contribute to this project by implementing additional features or improving the existing protocol.
+This implementation provides a robust foundation for a custom protocol that can be extended with additional features like encryption, compression, or more sophisticated error recovery mechanisms.
