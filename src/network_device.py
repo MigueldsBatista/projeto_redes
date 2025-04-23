@@ -1,6 +1,5 @@
 import struct
 import hashlib
-import socket
 
 class NetworkDevice:
     def __init__(self, server_addr, server_port, operation_mode='step-by-step', max_size=1024):
