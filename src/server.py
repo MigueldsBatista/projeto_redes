@@ -57,8 +57,9 @@ class Server(NetworkDevice):
         }
         
         # Send SYN-ACK with ACK_TYPE (0x02)
-        self.handle_packet(ACK_TYPE, json.dumps(response))
-        
+        packet = self.create_packet(ACK_TYPE, json.dumps(response))
+        client_socket.sendall(packet)
+
         return session_id
     
     def handle_ack(self, client_address, data):
@@ -86,7 +87,8 @@ class Server(NetworkDevice):
             print(f'Received binary data from {client_address}: {len(data)} bytes')
         
         # Send acknowledgment
-        self.handle_packet(ACK_TYPE, "ACK")
+        ack_packet = self.create_packet(ACK_TYPE, "ACK")
+        client_socket.sendall(ack_packet)
     
     def handle_disconnect(self, client_socket, client_address):
         print(f'Client disconnected: {client_address}')
