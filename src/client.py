@@ -16,99 +16,115 @@ class Client(NetworkDevice):
         self.session_id = None
 
     def connect(self):
-        # Create new socket
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._socket.connect((self.server_addr, self.server_port))
+        try:
+            # Create new socket
+            self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._socket.connect((self.server_addr, self.server_port))
 
-        # STEP 1: SYN - Client → Server
-        print('Connected to server')
-        print('Sending SYN...')
-        self.handle_packet(SYN_TYPE, json.dumps(self.connection_params))
+            # STEP 1: SYN - Client → Server
+            print(f"[LOG] Connected to server at {self.server_addr}:{self.server_port}")
+            print("[LOG] Sending SYN packet...")
+            self.handle_packet(SYN_TYPE, json.dumps(self.connection_params))
 
-        # STEP 2: Wait for SYN-ACK from Server
-        response_packet = self._socket.recv(self.connection_params['max_size'])
-        if not response_packet:
-            raise ConnectionError("No response from server")
+            # STEP 2: Wait for SYN-ACK from Server
+            print("[LOG] Waiting for SYN-ACK from server...")
+            response_packet = self._socket.recv(self.connection_params['max_size'])
+            if not response_packet:
+                raise ConnectionError("No response from server")
 
-        parsed = self.parse_packet(response_packet)
-        if not parsed:
-            raise ValueError("Invalid response from server")
+            parsed = self.parse_packet(response_packet)
+            if not parsed:
+                raise ValueError("Invalid response from server")
 
-        # Process SYN-ACK
-        syn_ack_data = json.loads(parsed['payload'])
-        print(f'Received SYN-ACK: {syn_ack_data}')
+            # Process SYN-ACK
+            syn_ack_data = json.loads(parsed['payload'])
+            print(f"[LOG] Received SYN-ACK: {syn_ack_data}")
 
-        if syn_ack_data.get('status') != 'ok':
-            raise ConnectionError(f"Handshake failed: {syn_ack_data.get('message', 'Unknown error')}")
+            if syn_ack_data.get('status') != 'ok':
+                raise ConnectionError(f"Handshake failed: {syn_ack_data.get('message', 'Unknown error')}")
 
-        # Store session information
-        self.session_id = syn_ack_data.get('session_id')
-        self.connection_params['max_size'] = syn_ack_data.get('max_size', self.connection_params['max_size'])
-        self.connection_params['operation_mode'] = syn_ack_data.get('operation_mode', self.connection_params['operation_mode'])
+            # Store session information
+            self.session_id = syn_ack_data.get('session_id')
+            self.connection_params['max_size'] = syn_ack_data.get('max_size', self.connection_params['max_size'])
+            self.connection_params['operation_mode'] = syn_ack_data.get('operation_mode', self.connection_params['operation_mode'])
 
-        # STEP 3: ACK - Client → Server
-        print('Sending ACK...')
-        ack_data = {'session_id': self.session_id, 'message': 'Connection established'}
-        self.handle_packet(HANDSHAKE_ACK_TYPE, json.dumps(ack_data))
+            # STEP 3: ACK - Client → Server
+            print("[LOG] Sending final ACK packet...")
+            ack_data = {'session_id': self.session_id, 'message': 'Connection established'}
+            self.handle_packet(HANDSHAKE_ACK_TYPE, json.dumps(ack_data))
 
-        self.handshake_complete = True
-        print('Handshake complete!')
-        return True
+            self.handshake_complete = True
+            print("[LOG] Handshake completed successfully!")
+            return True
+        except Exception as e:
+            print(f"[ERROR] Failed to connect: {e}")
+            return False
     
     def send_message(self, message):
-        if not self.handshake_complete or not self._socket:
-            raise ConnectionError("Cannot send message: Not connected")
+        try:
+            if not self.handshake_complete or not self._socket:
+                raise ConnectionError("Cannot send message: Not connected")
 
-        encoded_message = message.encode('utf-8') if isinstance(message, str) else message
+            encoded_message = message.encode('utf-8') if isinstance(message, str) else message
 
-        if len(encoded_message) > self.connection_params["max_size"]:
-            raise ValueError(f"Message exceeds maximum size of {self.connection_params['max_size']} bytes")
+            if len(encoded_message) > self.connection_params["max_size"]:
+                raise ValueError(f"Message exceeds maximum size of {self.connection_params['max_size']} bytes")
 
-        data_packet = self.create_packet(DATA_TYPE, encoded_message)
-        self._socket.sendall(data_packet)
+            data_packet = self.create_packet(DATA_TYPE, encoded_message)
+            print(f"[LOG] Sending message: {message}")
+            self._socket.sendall(data_packet)
 
-        if self.connection_params['operation_mode'] != 'step-by-step':
+            if self.connection_params['operation_mode'] != 'step-by-step':
+                time.sleep(0.1)
+                return True
+
+            print("[LOG] Waiting for ACK from server...")
+            response_packet = self._socket.recv(1024)
+            if not response_packet:
+                raise ConnectionError("No ACK received")
+
+            parsed = self.parse_packet(response_packet)
+            if not parsed or parsed['type'] != ACK_TYPE:
+                raise ValueError("Invalid ACK from server")
+
+            print("[LOG] Server message: ACK received")
             time.sleep(0.1)
             return True
-
-        response_packet = self._socket.recv(1024)
-        if not response_packet:
-            raise ConnectionError("No acknowledgment received")
-
-        parsed = self.parse_packet(response_packet)
-        if not parsed or parsed['type'] != ACK_TYPE:
-            raise ValueError("Invalid acknowledgment from server")
-
-        time.sleep(0.1)
-        return True
+        except Exception as e:
+            print(f"[ERROR] Failed to send message: {e}")
+            return False
     
     def disconnect(self):
-        if not self._socket:
-            return
+        try:
+            if not self._socket:
+                return
 
-        print("Disconnecting from server...")
-        # Send disconnect request
-        disconnect_packet = self.create_packet(DISCONNECT_TYPE, "Disconnect")
-        self._socket.sendall(disconnect_packet)
+            print("[LOG] Initiating disconnection...")
+            # Send disconnect request
+            disconnect_packet = self.create_packet(DISCONNECT_TYPE, "Disconnect")
+            self._socket.sendall(disconnect_packet)
 
-        # Wait for acknowledgment
-        self._socket.settimeout(2.0)
-        response_packet = self._socket.recv(1024)
+            # Wait for acknowledgment
+            print("[LOG] Waiting for server acknowledgment...")
+            self._socket.settimeout(2.0)
+            response_packet = self._socket.recv(1024)
 
-        if not response_packet:
-            raise ConnectionError("Server did not respond to disconnect request")
+            if not response_packet:
+                raise ConnectionError("Server did not respond to disconnect request")
 
-        print("Server acknowledged disconnect")
-        self._socket.close()
-        self.handshake_complete = False
-        print("Disconnected")
-    
+            print("[LOG] Server acknowledged disconnect. Closing socket...")
+            self._socket.close()
+            self.handshake_complete = False
+            print("[LOG] Disconnected successfully.")
+        except Exception as e:
+            print(f"[ERROR] Failed to disconnect: {e}")
+
     def run_interactive_session(self):
         if not self.connect():
+            print("[ERROR] Unable to establish connection. Exiting...")
             return
-            
+        print("[LOG] Interactive session started. Type 'exit' to quit.")
         # Continuous message sending loop
-        print("Enter messages (type 'exit' to quit):")
         while True:
             message = input('Message: ')
             
@@ -117,6 +133,7 @@ class Client(NetworkDevice):
                     
             self.send_message(message)
         
+        print("[LOG] Interactive session ended. Disconnecting...")
         self.disconnect()
 
 
