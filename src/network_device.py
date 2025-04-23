@@ -1,18 +1,10 @@
+import socket
 import struct
 import hashlib
 
 class NetworkDevice:
     def __init__(self, server_addr, server_port, operation_mode='step-by-step', max_size=1024):
-        """
-        Initialize a network device with connection parameters
-        
-        The three-way handshake process:
-        1. Client sends SYN with parameters (operation_mode, max_size)
-        2. Server responds with SYN-ACK, containing accepted parameters and session_id
-        3. Client confirms with ACK, completing the handshake
-        
-        After the handshake is complete, devices can exchange data messages.
-        """
+
         # Connection parameters
         self.connection_params = {
             "operation_mode": operation_mode,
@@ -23,7 +15,8 @@ class NetworkDevice:
         self.server_port = server_port
         self.max_size = max_size
         self.operation_mode = operation_mode
-     
+        self._socket : socket.socket
+
     def create_packet(self, message_type, payload, sequence_num=0):
         if isinstance(payload, str):
             payload = payload.encode('utf-8')
@@ -61,3 +54,8 @@ class NetworkDevice:
             'payload': payload,
             'length': payload_length
         }
+    
+
+    def handle_packet(self, data_type, payload: str):
+        data_packet = self.create_packet(data_type, payload)
+        self._socket.sendall(data_packet)

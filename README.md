@@ -2,6 +2,93 @@
 
 This document provides a detailed explanation of how our custom protocol implementation works, including the handshake process, message exchange, and connection termination.
 
+## How to Start Reading and Understanding the Code
+
+To understand the codebase, follow these steps:
+
+### 1. **Understand the Theoretical Concepts**
+
+Before diving into the code, familiarize yourself with the following networking concepts:
+- **Sockets**: A socket is an endpoint for sending or receiving data across a computer network.
+- **TCP/IP Protocol**: The Transmission Control Protocol ensures reliable communication between devices.
+- **Three-Way Handshake**: A process used to establish a TCP connection between a client and a server.
+- **Custom Protocols**: Protocols designed for specific use cases, defining message types, structures, and communication rules.
+
+### 2. **Explore the Code Structure**
+
+The project is organized into the following files:
+- `/src/network_device.py`: Contains the base class `NetworkDevice`, which provides packet creation and parsing utilities.
+- `/src/server.py`: Implements the server-side logic, including handling connections, messages, and the handshake process.
+- `/src/client.py`: Implements the client-side logic, including connecting to the server, sending messages, and disconnecting.
+- `/src/settings.py`: Defines constants for message types used in the protocol.
+
+### 3. **Start with the `settings.py` File**
+
+Open `/src/settings.py` to understand the constants used in the protocol:
+- `SYN_TYPE`, `ACK_TYPE`, `DATA_TYPE`, and `DISCONNECT_TYPE` represent different message types.
+- These constants are referenced throughout the code to identify the type of communication.
+
+### 4. **Understand the `NetworkDevice` Base Class**
+
+The `/src/network_device.py` file contains the `NetworkDevice` class, which provides:
+- **Packet Creation (`create_packet`)**: Combines a header and payload into a complete packet.
+- **Packet Parsing (`parse_packet`)**: Extracts and validates information from a received packet.
+
+This class is inherited by both the `Server` and `Client` classes to handle low-level packet operations.
+
+### 5. **Analyze the Server Implementation**
+
+The `/src/server.py` file implements the `Server` class:
+- **Initialization**: Sets up the server socket and prepares to accept client connections.
+- **Handshake Process**: Implements the three-way handshake (SYN → SYN-ACK → ACK) to establish a connection.
+- **Message Handling**: Processes data messages and sends acknowledgments.
+- **Disconnection**: Handles client disconnect requests and cleans up resources.
+
+Start by reading the `start` method, which is the entry point for the server, and follow the flow of connection handling.
+
+### 6. **Analyze the Client Implementation**
+
+The `/src/client.py` file implements the `Client` class:
+- **Initialization**: Sets up the client socket and connection parameters.
+- **Handshake Process**: Initiates the three-way handshake with the server.
+- **Message Sending**: Sends data messages to the server and optionally waits for acknowledgments.
+- **Disconnection**: Sends a disconnect request to the server and closes the connection.
+
+Start by reading the `run_interactive_session` method, which provides an interactive way to send messages to the server.
+
+### 7. **Run the Code**
+
+To see the code in action:
+1. Start the server:
+   ```bash
+   python /home/miguel/projeto_redes/src/server.py --host 127.0.0.1 --port 5000
+   ```
+2. Start the client:
+   ```bash
+   python /home/miguel/projeto_redes/src/client.py --server-addr 127.0.0.1 --server-port 5000
+   ```
+3. Follow the prompts in the client to send messages to the server.
+
+### 8. **Experiment with the Protocol**
+
+Modify the constants in `settings.py` or the parameters passed to the `Server` and `Client` classes to experiment with:
+- Different maximum packet sizes.
+- Step-by-step vs. burst operation modes.
+- Custom message types or payloads.
+
+### 9. **Debugging and Logs**
+
+Use the print statements in the code to trace the flow of execution and understand how messages are processed. For example:
+- Look for "Received SYN" in the server logs to see when a client initiates a connection.
+- Look for "Handshake complete" in the client logs to confirm a successful connection.
+
+### 10. **Extend the Protocol**
+
+Once you understand the basics, consider extending the protocol by:
+- Adding encryption for secure communication.
+- Implementing error recovery mechanisms for lost or corrupted packets.
+- Supporting additional message types or features.
+
 ## Message Types
 
 Our protocol defines specific message types to distinguish between different kinds of communication:
