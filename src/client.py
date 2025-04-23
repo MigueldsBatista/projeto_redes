@@ -65,30 +65,39 @@ class Client(NetworkDevice):
             if not self.handshake_complete or not self._socket:
                 raise ConnectionError("Cannot send message: Not connected")
 
-            encoded_message = message.encode('utf-8') if isinstance(message, str) else message
+            # Ensure the message is a string
+            if not isinstance(message, str):
+                raise ValueError("Message must be a string")
 
-            if len(encoded_message) > self.connection_params["max_size"]:
-                raise ValueError(f"Message exceeds maximum size of {self.connection_params['max_size']} bytes")
+            # Fragment the message into chunks of 3 characters
+            fragments = [message[i:i+3] for i in range(0, len(message), 3)]
 
-            data_packet = self.create_packet(DATA_TYPE, encoded_message)
-            print(f"[LOG] Sending message: {message}")
-            self._socket.sendall(data_packet)
+            for fragment in fragments:
+                encoded_message = fragment.encode('utf-8')
 
-            if self.connection_params['operation_mode'] != 'step-by-step':
+                if len(encoded_message) > 3:
+                    raise ValueError("Fragment exceeds maximum size of 3 bytes")
+
+                data_packet = self.create_packet(DATA_TYPE, encoded_message)
+                print(f"[LOG] Sending fragment: {fragment}")
+                self._socket.sendall(data_packet)
+
+                if self.connection_params['operation_mode'] != 'step-by-step':
+                    time.sleep(0.1)
+                    continue
+
+                print("[LOG] Waiting for ACK from server...")
+                response_packet = self._socket.recv(1024)
+                if not response_packet:
+                    raise ConnectionError("No ACK received")
+
+                parsed = self.parse_packet(response_packet)
+                if not parsed or parsed['type'] != ACK_TYPE:
+                    raise ValueError("Invalid ACK from server")
+
+                print("[LOG] Server message: ACK received")
                 time.sleep(0.1)
-                return True
 
-            print("[LOG] Waiting for ACK from server...")
-            response_packet = self._socket.recv(1024)
-            if not response_packet:
-                raise ConnectionError("No ACK received")
-
-            parsed = self.parse_packet(response_packet)
-            if not parsed or parsed['type'] != ACK_TYPE:
-                raise ValueError("Invalid ACK from server")
-
-            print("[LOG] Server message: ACK received")
-            time.sleep(0.1)
             return True
         except Exception as e:
             print(f"[ERROR] Failed to send message: {e}")
