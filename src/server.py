@@ -122,6 +122,7 @@ class Server(NetworkDevice):
                 return False
 
             data = json.loads(payload)
+            self.protocol = data.get('protocol', 'gbn')
             self.handle_syn(client_socket, client_address, data)
 
             # Wait for ACK from client
@@ -167,8 +168,17 @@ class Server(NetworkDevice):
 
                 # Handle message based on type
                 if message_type == DATA_TYPE:
-                    self.handle_message(client_socket, client_address, payload)
-                    continue
+                    
+                    print(f"Received message from {client_address}: {payload.decode('utf-8')}")
+
+                    # TIPOS DOS PROTOCOLOS
+                    if self.protocol == 'gbn':
+                        ack_packet = self.create_packet(ACK_TYPE, "ACK for GBN")
+                        client_socket.sendall(ack_packet)
+                        
+                    elif self.protocol == 'sr':
+                        ack_packet = self.create_packet(ACK_TYPE, f"ACK for {sequence_num}")
+                        client_socket.sendall(ack_packet)
 
                 if message_type == DISCONNECT_TYPE:
                     if self.handle_disconnect(client_socket, client_address):
