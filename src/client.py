@@ -204,5 +204,7 @@ if __name__ == '__main__':
         )
         
         client.run_interactive_session()
+    except KeyboardInterrupt:
+        print("\n[LOG] Interrupção detectada. Encerrando o cliente de forma segura...")
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"[ERROR] Ocorreu um erro: {e}")
