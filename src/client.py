@@ -186,9 +186,13 @@ if __name__ == '__main__':
         parser.add_argument('--server-port', type=int, default=5000, help='Server port')
         parser.add_argument('--max-size', type=int, default=1024, help='Maximum packet size')
         parser.add_argument('--operation-mode', choices=['step-by-step', 'burst'], default='step-by-step', help='Operation mode')
-        parser.add_argument('--protocol', choices=['gbn', 'sr'], default='gbn', help='Reliable transmission protocol')
-
+        
         args = parser.parse_args()
+        protocol = input("Choose protocol (gbn or sr): ").strip().lower()
+        
+        while protocol not in ['gbn', 'sr']:
+            print("Invalid protocol. Please choose 'gbn' or 'sr'.")
+            protocol = input("Choose protocol (gbn or sr): ").strip().lower()
 
         # Create client with provided arguments
         client = Client(
@@ -196,7 +200,7 @@ if __name__ == '__main__':
             server_port=args.server_port,
             max_size=args.max_size,
             operation_mode=args.operation_mode,
-            protocol=args.protocol
+            protocol=protocol
         )
         
         client.run_interactive_session()
