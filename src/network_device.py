@@ -17,13 +17,15 @@ class NetworkDevice:
         self.operation_mode = operation_mode
         self._socket : socket.socket
 
-    def create_packet(self, message_type, payload, sequence_num=0):
+    def create_packet(self, message_type, payload, sequence_num=0,checksum=None):
         if isinstance(payload, str):
             payload = payload.encode('utf-8')
             
         payload_length = len(payload)
         checksum = hashlib.md5(payload).digest()[:4]  # 4-byte checksum
-        
+            # Calcular o checksum apenas se ele não for fornecido
+        if checksum is None:
+            checksum = hashlib.md5(payload).digest()[:4]  # 4-byte checksum
         #!IBH4s # é o formato do struct.pack que quer dizer que o primeiro byte é um inteiro,
         # o segundo byte é um inteiro, o terceiro byte é um inteiro e o quarto byte é uma string de 4 bytes
 

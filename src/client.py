@@ -4,14 +4,15 @@ import argparse
 import time
 import random
 from network_device import NetworkDevice
-
 from settings import *
+
+NACK_TYPE = 0x04  # Tipo de pacote para NACK
 
 class Client(NetworkDevice):
     def __init__(self, server_addr='127.0.0.1', server_port=5000, operation_mode='step-by-step', max_size=1024, protocol='gbn'):
         # Call parent constructor
         super().__init__(server_addr, server_port, operation_mode, max_size)
-        
+
         # Client-specific attributes
         self.handshake_complete = False
         self.session_id = None
@@ -64,7 +65,15 @@ class Client(NetworkDevice):
         except Exception as e:
             print(f"[ERROR] Failed to connect: {e}")
             return False
-    
+
+    def calculate_checksum(self, data):
+        """
+        Calcula um checksum simples para os dados.
+        :param data: Dados (bytes)
+        :return: Checksum (int)
+        """
+        return sum(data) % 256
+
     def send_message(self, message):
         try:
             if not self.handshake_complete or not self._socket:
@@ -77,65 +86,37 @@ class Client(NetworkDevice):
             # Fragment the message into chunks of 3 characters
             fragments = [message[i:i+3] for i in range(0, len(message), 3)]
 
-            if self.protocol == 'gbn':
-                # no Go-BACK-N a logica é enviar um numero fixo de pacotes e depois esperar o ACK
-                for i, fragment in enumerate(fragments):
-                    encoded_message = fragment.encode('utf-8')
-                    
-                    if len(encoded_message) > 3:
-                        raise ValueError("Fragment exceeds maximum size of 3 bytes")
-                    
-                    data_packet = self.create_packet(DATA_TYPE, encoded_message)
-                    print(f"[LOG] Sending fragment: {fragment}")
-                    self._socket.sendall(data_packet)
-                    
-                    if self.connection_params['operation_mode'] != 'step-by-step':
-                        time.sleep(0.1)
-                        continue
-                    
-                    response_packet = self._socket.recv(1024)
-                    
-                    if not response_packet:
-                        raise ConnectionError("No ACK received")
-                    
-                    parsed = self.parse_packet(response_packet)
-                    
-                    if not parsed or parsed['type'] != ACK_TYPE:
-                        raise ValueError("Invalid ACK from server")
-                    
+            for fragment in fragments:
+                encoded_message = fragment.encode('utf-8')
+
+                # Calculate checksum
+                checksum = self.calculate_checksum(encoded_message)
+
+                # Create packet with checksum
+                data_packet = self.create_packet(DATA_TYPE, encoded_message, checksum=checksum)
+                print(f"[LOG] Sending fragment: {fragment} with checksum: {checksum}")
+                self._socket.sendall(data_packet)
+
+                # Wait for ACK or NACK
+                response_packet = self._socket.recv(1024)
+                if not response_packet:
+                    raise ConnectionError("No response received")
+
+                parsed = self.parse_packet(response_packet)
+                if not parsed:
+                    raise ValueError("Invalid response from server")
+
+                if parsed['type'] == ACK_TYPE:
                     print("[LOG] Server message: ACK received")
-                    time.sleep(0.1)
-                    
-            elif self.protocol == 'sr':
-                # no Selective Repeat a logica é enviar todos os pacotes de forma individual e esperar sempre um ACK pra cada
-                for fragment in fragments:
-                    encoded_message = fragment.encode('utf-8')
-                    
-                    if len(encoded_message) > 3:
-                        raise ValueError("Fragment exceeds maximum size of 3 bytes")
-                    
-                    data_packet = self.create_packet(DATA_TYPE, encoded_message)
-                    print(f"[LOG] Sending fragment: {fragment}")
-                    self._socket.sendall(data_packet)
-                    print("[LOG] Waiting for ACK...")
-                    response_packet = self._socket.recv(1024)
-                    
-                    if not response_packet:
-                        raise ConnectionError("No ACK received")
-                    
-                    parsed = self.parse_packet(response_packet)
-                    
-                    if not parsed or parsed['type'] != ACK_TYPE:
-                        raise ValueError("Invalid ACK from server")
-                    
-                    print("[LOG] Server message: ACK received")
-                    time.sleep(0.1)
-                    
+                elif parsed['type'] == NACK_TYPE:
+                    print("[LOG] Server message: NACK received, resending fragment")
+                    continue  # Resend the fragment
+
             return True
         except Exception as e:
             print(f"[ERROR] Failed to send message: {e}")
             return False
-    
+
     def disconnect(self):
         try:
             if not self._socket:
@@ -166,18 +147,18 @@ class Client(NetworkDevice):
             print("[ERROR] Unable to establish connection. Exiting...")
             return
         print("[LOG] Interactive session started. Type 'exit' to quit.")
+
         # Continuous message sending loop
         while True:
             message = input('Message: ')
-            
+
             if message.lower() == 'exit':
                 break
-                    
+
             self.send_message(message)
-        
+
         print("[LOG] Interactive session ended. Disconnecting...")
         self.disconnect()
-        # ...existing code...
 
     def simulate_channel(self, data):
         """
@@ -201,44 +182,12 @@ class Client(NetworkDevice):
             data[index] = (data[index] + random.randint(1, 255)) % 256  # Modifica um byte
             return bytes(data)
 
-        return data
-
-    def send_message(self, message):
-        try:
-            if not self.handshake_complete or not self._socket:
-                raise ConnectionError("Cannot send message: Not connected")
-
-            # Fragmentar a mensagem
-            fragments = [message[i:i+3] for i in range(0, len(message), 3)]
-
-            for fragment in fragments:
-                encoded_message = fragment.encode('utf-8')
-                data_packet = self.create_packet(DATA_TYPE, encoded_message)
-
-                # Simular canal de perdas e erros
-                data_packet = self.simulate_channel(data_packet)
-                if data_packet is None:
-                    continue  # Pacote perdido, não envia
-
-                print(f"[LOG] Sending fragment: {fragment}")
-                self._socket.sendall(data_packet)
-
-                # Esperar ACK
-                response_packet = self._socket.recv(1024)
-                if not response_packet:
-                    raise ConnectionError("No ACK received")
-
-                parsed = self.parse_packet(response_packet)
-                if not parsed or parsed['type'] != ACK_TYPE:
-                    raise ValueError("Invalid ACK from server")
-
-                print("[LOG] Server message: ACK received")
-                time.sleep(0.1)
-
-            return True
-        except Exception as e:
-            print(f"[ERROR] Failed to send message: {e}")
-            return False
+        # Forçar erro propositalmente
+        print("[LOG] Forçando erro no pacote!")
+        data = bytearray(data)
+        index = random.randint(0, len(data) - 1)
+        data[index] = (data[index] + random.randint(1, 255)) % 256  # Corrompe um byte
+        return bytes(data)
 
 if __name__ == '__main__':
     try:
@@ -248,10 +197,10 @@ if __name__ == '__main__':
         parser.add_argument('--server-port', type=int, default=5000, help='Server port')
         parser.add_argument('--max-size', type=int, default=1024, help='Maximum packet size')
         parser.add_argument('--operation-mode', choices=['step-by-step', 'burst'], default='step-by-step', help='Operation mode')
-        
+
         args = parser.parse_args()
         protocol = input("Choose protocol (gbn or sr): ").strip().lower()
-        
+
         while protocol not in ['gbn', 'sr']:
             print("Invalid protocol. Please choose 'gbn' or 'sr'.")
             protocol = input("Choose protocol (gbn or sr): ").strip().lower()
@@ -264,7 +213,7 @@ if __name__ == '__main__':
             operation_mode=args.operation_mode,
             protocol=protocol
         )
-        
+
         client.run_interactive_session()
     except KeyboardInterrupt:
         print("\n[LOG] Interrupção detectada. Encerrando o cliente de forma segura...")
