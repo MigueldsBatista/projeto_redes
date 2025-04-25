@@ -2,6 +2,7 @@ import socket
 import json
 import argparse
 import time
+import random
 from network_device import NetworkDevice
 
 from settings import *
@@ -176,7 +177,68 @@ class Client(NetworkDevice):
         
         print("[LOG] Interactive session ended. Disconnecting...")
         self.disconnect()
+        # ...existing code...
 
+    def simulate_channel(self, data):
+        """
+        Simula um canal com perdas e erros antes de enviar.
+        :param data: Dados a serem enviados (bytes)
+        :return: Dados possivelmente alterados ou None (em caso de perda)
+        """
+        loss_probability = 0.1  # 10% de chance de perda
+        error_probability = 0.1  # 10% de chance de erro
+
+        # Simular perda de pacote
+        if random.random() < loss_probability:
+            print("[LOG] Pacote perdido!")
+            return None
+
+        # Simular erro no pacote
+        if random.random() < error_probability:
+            print("[LOG] Pacote corrompido!")
+            data = bytearray(data)
+            index = random.randint(0, len(data) - 1)
+            data[index] = (data[index] + random.randint(1, 255)) % 256  # Modifica um byte
+            return bytes(data)
+
+        return data
+
+    def send_message(self, message):
+        try:
+            if not self.handshake_complete or not self._socket:
+                raise ConnectionError("Cannot send message: Not connected")
+
+            # Fragmentar a mensagem
+            fragments = [message[i:i+3] for i in range(0, len(message), 3)]
+
+            for fragment in fragments:
+                encoded_message = fragment.encode('utf-8')
+                data_packet = self.create_packet(DATA_TYPE, encoded_message)
+
+                # Simular canal de perdas e erros
+                data_packet = self.simulate_channel(data_packet)
+                if data_packet is None:
+                    continue  # Pacote perdido, não envia
+
+                print(f"[LOG] Sending fragment: {fragment}")
+                self._socket.sendall(data_packet)
+
+                # Esperar ACK
+                response_packet = self._socket.recv(1024)
+                if not response_packet:
+                    raise ConnectionError("No ACK received")
+
+                parsed = self.parse_packet(response_packet)
+                if not parsed or parsed['type'] != ACK_TYPE:
+                    raise ValueError("Invalid ACK from server")
+
+                print("[LOG] Server message: ACK received")
+                time.sleep(0.1)
+
+            return True
+        except Exception as e:
+            print(f"[ERROR] Failed to send message: {e}")
+            return False
 
 if __name__ == '__main__':
     try:

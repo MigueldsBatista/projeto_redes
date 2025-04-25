@@ -3,6 +3,7 @@ import struct
 import hashlib
 import argparse
 import json
+import random
 from network_device import NetworkDevice
 
 from settings import *
@@ -229,7 +230,84 @@ class Server(NetworkDevice):
         finally:
             self._socket.close()
 
+    def simulate_channel(self, data):
+        # Simula um canal com perdas e erros
+        loss_probability = 0.1
+        error_probability = 0.1
 
+        if random.random() < loss_probability:
+            print("[LOG] Pacote perdido!")
+            return None
+
+        if random.random() < error_probability:
+            print("[LOG] Pacote corrompido!")
+            data = bytearray(data)
+            index = random.randint(0, len(data) - 1)
+            data[index] = (data[index] + random.randint(1, 255)) % 256
+            return bytes(data)
+
+        return data
+
+    def handle_client_messages(self, client_socket: socket.socket, client_address):
+        while client_address in self.client_sessions:
+            try:
+                header = client_socket.recv(11)
+                if not header or len(header) < 11:
+                    print(f"[ERROR] Incomplete or missing header from {client_address}")
+                    break
+
+                try:
+                    payload_length, message_type, sequence_num, checksum = struct.unpack('!IBH4s', header)
+                except struct.error as e:
+                    print(f"[ERROR] Failed to unpack header from {client_address}: {e}")
+                    break
+
+                payload = client_socket.recv(payload_length)
+                if len(payload) < payload_length:
+                    print(f"[ERROR] Incomplete payload received from {client_address}")
+                    break
+
+                payload = self.simulate_channel(payload)
+                if payload is None:
+                    print(f"[LOG] Packet from {client_address} lost in simulated channel.")
+                    continue
+
+                if message_type == DATA_TYPE:
+                    try:
+                        decoded_message = payload.decode('utf-8')
+                        print(f"[LOG] Received message from {client_address}: {decoded_message}")
+                    except UnicodeDecodeError:
+                        print(f"[LOG] Received binary data from {client_address}: {len(payload)} bytes")
+
+                    if self.protocol == 'gbn':
+                        ack_packet = self.create_packet(ACK_TYPE, "ACK for GBN")
+                    elif self.protocol == 'sr':
+                        ack_packet = self.create_packet(ACK_TYPE, f"ACK for {sequence_num}")
+                    else:
+                        ack_packet = self.create_packet(ACK_TYPE, "ACK")
+
+                    client_socket.sendall(ack_packet)
+                    print(f"[LOG] Sent ACK to {client_address}")
+
+                elif message_type == DISCONNECT_TYPE:
+                    if self.handle_disconnect(client_socket, client_address):
+                        print(f"[LOG] Client {client_address} disconnected successfully.")
+                        break
+                else:
+                    print(f"[ERROR] Unknown message type {message_type} from {client_address}")
+
+            except Exception as e:
+                print(f"[ERROR] Error handling messages from {client_address}: {e}")
+                break
+
+        if client_address in self.client_sessions:
+            del self.client_sessions[client_address]
+
+        try:
+            client_socket.close()
+            print(f"[LOG] Connection with {client_address} closed.")
+        except Exception as e:
+            print(f"[ERROR] Failed to close connection with {client_address}: {e}")
 if __name__ == '__main__':
     try:
         # Parse command line arguments
