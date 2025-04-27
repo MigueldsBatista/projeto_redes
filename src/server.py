@@ -1,180 +1,311 @@
 import socket
-import struct
 import hashlib
 import argparse
 import json
-import random
 from network_device import NetworkDevice
 from settings import *
+# We'll remove the direct import of ServerTerminalUI to avoid circular dependencies
 
-NACK_TYPE = 0x04
+
 class Server(NetworkDevice):
-    def __init__(self, host='127.0.0.1', port=5000, max_size=1024, operation_mode='step-by-step'):
-        super().__init__(host, port, operation_mode, max_size)
+    def __init__(self, host='127.0.0.1', port=5000, protocol='gbn', max_fragment_size=3, window_size=4):
+        super().__init__(host, port, protocol, max_fragment_size, window_size)
         self.host = host
         self.port = port
         self.client_sessions = {}
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    def handle_syn(self, client_socket: socket.socket, client_address, data):
-        print(f'Received SYN from {client_address}: {data}')
-        operation_mode = data.get('operation_mode', self.operation_mode)
-        requested_max_size = data.get('max_size', self.max_size)
-        max_size = min(requested_max_size, self.max_size)
+    def handle_syn(self, client_socket: socket.socket, client_address:str, data:dict):
+        """Process SYN request during handshake and negotiate connection parameters"""
+        print(f'[LOG] Received SYN from {client_address}: {data}')
+        
+        # Extract and validate connection parameters
+        client_protocol = data.get('protocol', self.protocol)
+        requested_fragment_size = data.get('max_fragment_size', self.max_fragment_size)
+        requested_window_size = data.get('window_size', self.window_size)
+        
+        # Apply server-side limits if needed
+        max_fragment_size = min(requested_fragment_size, self.max_fragment_size)
+        
+        # Generate a unique session ID
         session_id = hashlib.md5(f"{client_address}{socket.gethostname()}".encode()).hexdigest()[:8]
-
+        
+        # Store session information
         self.client_sessions[client_address] = {
-            'operation_mode': operation_mode,
-            'max_size': max_size,
+            'protocol': client_protocol,
+            'max_fragment_size': max_fragment_size,
+            'window_size': requested_window_size,
             'session_id': session_id,
             'handshake_complete': False,
-            'socket': client_socket
+            'socket': client_socket,
+            'expected_seq_num': 0,  # For GBN
+            'received_buffer': {},  # For SR
+            'last_ack_sent': -1     # For tracking ACKs
         }
-
+        
+        # Prepare SYN-ACK response with negotiated parameters
         response = {
             'status': 'ok',
-            'operation_mode': operation_mode,
-            'max_size': max_size,
+            'protocol': client_protocol,
+            'max_fragment_size': max_fragment_size,
+            'window_size': requested_window_size,
             'session_id': session_id,
             'message': 'SYN-ACK: Parameters accepted'
         }
-
+        
+        # Send SYN-ACK
         packet = self.create_packet(ACK_TYPE, json.dumps(response))
         client_socket.sendall(packet)
         return session_id
 
-    def handle_ack(self, client_address, data):
-        print(f'Received ACK from {client_address}: {data}')
+    def handle_ack(self, client_address:str, data:dict):
+        """Process final ACK to complete handshake"""
+        print(f'[LOG] Received ACK from {client_address}: {data}')
         if client_address in self.client_sessions:
             self.client_sessions[client_address]['handshake_complete'] = True
-            print(f'Handshake completed for client {client_address}')
+            print(f'[LOG] Handshake completed for client {client_address}')
             return True
         return False
 
-    def handle_message(self, client_socket, client_address, data):
+    def handle_message(self, client_socket:socket.socket, client_address:str, data_bytes:bytes, sequence_num=0):
+        """Process data messages from client"""
+        # Verify handshake is complete
         if not self.client_sessions.get(client_address, {}).get('handshake_complete', False):
-            print(f'Rejected message from {client_address}: Handshake not complete')
+            print(f'[ERROR] Rejected message from {client_address}: Handshake not complete')
             return
+            
+        session = self.client_sessions[client_address]
+        protocol = session.get('protocol', 'gbn')
+        
         try:
-            decoded_message = data.decode('utf-8')
-            print(f'Received message from {client_address}: {decoded_message}')
+            # Process the message based on protocol
+            if protocol == 'gbn':
+                return self.handle_gbn_message(client_socket, client_address, data_bytes, sequence_num)
+            elif protocol == 'sr':
+                return self.handle_sr_message(client_socket, client_address, data_bytes, sequence_num)
+        except Exception as e:
+            print(f"[ERROR] Error handling message: {e}")
+            
+    def handle_gbn_message(self, client_socket:socket.socket, client_address:str, data_bytes:bytes, sequence_num=0):
+        """Handle Go-Back-N protocol message"""
+        session = self.client_sessions[client_address]
+        expected_seq = session['expected_seq_num']
+        
+        try:
+            # Decode message for logging
+            decoded_message = data_bytes.decode('utf-8')
+            
+            # If the sequence number matches what we expect, accept it
+            if sequence_num == expected_seq:
+                print(f'[LOG] GBN: Received expected fragment {sequence_num}: "{decoded_message}"')
+                
+                # Process the message (in a real application, this would do something with the data)
+                # Here we just print it and acknowledge
+                
+                # Update expected sequence number
+                session['expected_seq_num'] = expected_seq + 1
+                session['last_ack_sent'] = expected_seq
+                
+                # Send ACK for the received packet
+                ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
+                client_socket.sendall(ack_packet)
+                print(f'[LOG] GBN: Sent ACK for sequence {sequence_num}')
+                
+                return True
+            else:
+                # In GBN, if we receive an out-of-order packet, we ignore it and resend the last ACK
+                print(f'[LOG] GBN: Received out-of-order fragment {sequence_num}, expected {expected_seq}')
+                
+                # Only ACK up to the last in-order packet received
+                last_ack = session['last_ack_sent']
+                ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {last_ack}", sequence_num=last_ack)
+                client_socket.sendall(ack_packet)
+                print(f'[LOG] GBN: Resent ACK for sequence {last_ack}')
+                
+                return False
+                
         except UnicodeDecodeError:
-            print(f'Received binary data from {client_address}: {len(data)} bytes')
+            print(f'[LOG] Received binary data from {client_address} (seq={sequence_num}): {len(data_bytes)} bytes')
+            # Handle binary data similarly
+            if sequence_num == expected_seq:
+                session['expected_seq_num'] = expected_seq + 1
+                session['last_ack_sent'] = expected_seq
+                
+                ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
+                client_socket.sendall(ack_packet)
+                return True
+            else:
+                last_ack = session['last_ack_sent']
+                ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {last_ack}", sequence_num=last_ack)
+                client_socket.sendall(ack_packet)
+                return False
+    
+    def handle_sr_message(self, client_socket:socket.socket, client_address:str, data_bytes:bytes, sequence_num=0):
+        """Handle Selective Repeat protocol message"""
+        session = self.client_sessions[client_address]
+        expected_seq = session['expected_seq_num']
+        buffer = session['received_buffer']
+        
+        try:
+            # Decode message for logging
+            decoded_message = data_bytes.decode('utf-8')
+            
+            # In SR, we accept and buffer out-of-order packets
+            print(f'[LOG] SR: Received fragment {sequence_num}: "{decoded_message}"')
+            
+            # Store the packet in the buffer
+            buffer[sequence_num] = data_bytes
+            
+            # Send ACK for the received packet
+            ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
+            client_socket.sendall(ack_packet)
+            print(f'[LOG] SR: Sent ACK for sequence {sequence_num}')
+            
+            # Process consecutive packets in the buffer
+            while expected_seq in buffer:
+                # Process the packet data (in a real application, do something with it)
+                print(f'[LOG] SR: Processing buffered message {expected_seq}')
+                
+                # Remove from buffer and update expected sequence number
+                del buffer[expected_seq]
+                expected_seq += 1
+            
+            # Update the expected sequence number
+            session['expected_seq_num'] = expected_seq
+            
+            return True
+                
+        except UnicodeDecodeError:
+            print(f'[LOG] SR: Received binary data from {client_address} (seq={sequence_num}): {len(data_bytes)} bytes')
+            
+            # Handle binary data
+            buffer[sequence_num] = data_bytes
+            
+            ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
+            client_socket.sendall(ack_packet)
+            
+            # Process consecutive packets in the buffer
+            while expected_seq in buffer:
+                del buffer[expected_seq]
+                expected_seq += 1
+            
+            session['expected_seq_num'] = expected_seq
+            
+            return True
 
-        ack_packet = self.create_packet(ACK_TYPE, "ACK")
-        client_socket.sendall(ack_packet)
-
-    def handle_disconnect(self, client_socket, client_address):
-        print(f'Client disconnected: {client_address}')
+    def handle_disconnect(self, client_socket:socket.socket, client_address:str):
+        """Process client disconnect request"""
+        print(f'[LOG] Client disconnecting: {client_address}')
         if client_address in self.client_sessions:
-            ack_packet = self.create_packet(ACK_TYPE, "ACK")
+            ack_packet = self.create_packet(ACK_TYPE, "Disconnect acknowledged")
             try:
                 client_socket.sendall(ack_packet)
+                print(f'[LOG] Sent disconnect acknowledgment to {client_address}')
             except:
-                pass
+                print(f'[LOG] Failed to send disconnect acknowledgment to {client_address}')
+                
             del self.client_sessions[client_address]
             return True
+            
         return False
 
-    def process_handshake(self, client_socket: socket.socket, client_address):
+    def process_handshake(self, client_socket: socket.socket, client_address: str):
+        """Manage the complete three-way handshake process"""
         try:
-            header = client_socket.recv(11)
-            if not header or len(header) < 11:
+            # Receive initial SYN header - use proper buffer size
+            header = client_socket.recv(self.BUFFER_SIZE)
+            if not header or len(header) < self.HEADER_SIZE:
+                print(f"[ERROR] Invalid header received from {client_address}")
                 return False
 
-            payload_length, message_type, sequence_num, checksum = struct.unpack('!IBH4s', header)
-            payload = client_socket.recv(payload_length)
-
-            if message_type != SYN_TYPE:
+            # Parse header fields
+            parsed = self.parse_packet(header)
+            if not parsed:
+                print(f"[ERROR] Failed to parse packet from {client_address}")
                 return False
 
-            data = json.loads(payload)
-            self.protocol = data.get('protocol', 'gbn')
+            # Verify message type is SYN
+            if parsed['type'] != SYN_TYPE:
+                print(f"[ERROR] Expected SYN but got message type {parsed['type']}")
+                return False
+
+            # Parse connection parameters
+            data = json.loads(parsed['payload'])
+            client_protocol = data.get('protocol', 'gbn')
+            print(f"[LOG] Client requesting protocol: {client_protocol}")
+            
+            # Process SYN and send SYN-ACK
             self.handle_syn(client_socket, client_address, data)
 
-            header = client_socket.recv(11)
-            if not header or len(header) < 11:
+            # Wait for final ACK - use proper buffer size
+            header = client_socket.recv(self.BUFFER_SIZE)
+            parsed = self.parse_packet(header)
+            if not parsed:
+                print(f"[ERROR] Failed to receive ACK from {client_address}")
                 return False
 
-            payload_length, message_type, sequence_num, checksum = struct.unpack('!IBH4s', header)
-
-            if message_type != 0x03:
+            # Verify message type is HANDSHAKE_ACK
+            if parsed['type'] != HANDSHAKE_ACK_TYPE:
+                print(f"[ERROR] Expected HANDSHAKE_ACK but got message type {parsed['type']}")
                 return False
 
-            payload = client_socket.recv(payload_length)
-            data = json.loads(payload)
-
+            # Complete handshake
+            data = json.loads(parsed['payload'])
             if self.handle_ack(client_address, data):
-                print(f"Handshake completed with {client_address}")
+                print(f"[LOG] Handshake completed with {client_address}")
                 return True
 
             return False
+            
         except Exception as e:
-            print(f"Error in handshake with {client_address}: {e}")
+            print(f"[ERROR] Error in handshake with {client_address}: {e}")
             return False
 
-    def calculate_checksum(self, data):
-        return sum(data) % 256
-
-    def simulate_channel(self, data):
-        loss_probability = 0.1
-        error_probability = 0.1
-
-        if random.random() < loss_probability:
-            print("[LOG] Pacote perdido!")
-            return None
-
-        if random.random() < error_probability:
-            print("[LOG] Pacote corrompido!")
-            data = bytearray(data)
-            index = random.randint(0, len(data) - 1)
-            data[index] = (data[index] + random.randint(1, 255)) % 256
-            return bytes(data)
-
-        return data
-
-    def handle_client_messages(self, client_socket: socket.socket, client_address):
+    def handle_client_messages(self, client_socket: socket.socket, client_address:str):
+        """Continuously receive and process messages from a connected client"""
         while client_address in self.client_sessions:
             try:
-                header = client_socket.recv(11)
-                if not header or len(header) < 11:
-                    print(f"[ERROR] Incomplete or missing header from {client_address}")
+                # Receive packet with proper buffer size
+                packet = client_socket.recv(self.BUFFER_SIZE)
+                if not packet:
+                    print(f"[ERROR] Client {client_address} disconnected unexpectedly")
                     break
 
-                try:
-                    payload_length, message_type, sequence_num, checksum = struct.unpack('!IBH4s', header)
-                except struct.error as e:
-                    print(f"[ERROR] Failed to unpack header from {client_address}: {e}")
-                    break
-
-                payload = client_socket.recv(payload_length)
-                if len(payload) < payload_length:
-                    print(f"[ERROR] Incomplete payload received from {client_address}")
-                    break
-
-                payload = self.simulate_channel(payload)
-                if payload is None:
-                    print(f"[LOG] Packet from {client_address} lost in simulated channel.")
+                parsed = self.parse_packet(packet)
+                if not parsed:
+                    print(f"[ERROR] Failed to parse packet from {client_address}")
                     continue
 
+                message_type = parsed['type']
+                sequence_num = parsed['sequence']
+                payload = parsed['payload']
+
+                # Simulate network conditions (packet loss/corruption)
+                client_protocol = self.client_sessions[client_address].get('protocol', 'gbn')
+                processed_payload = self.simulate_channel(payload, sequence_num)
+                
+                if processed_payload is None:
+                    print(f"[CHANNEL] Simulated packet loss for message from {client_address} (seq={sequence_num})")
+                    # Don't send a NACK for lost packets in a real network scenario
+                    # In packet loss simulation, we should just ignore it as if it was never received
+                    # This will allow the client to timeout and retransmit as expected
+                    continue
+
+                # Check for corrupted data (if the processed payload is different from original but not None)
+                if processed_payload != payload and processed_payload is not None:
+                    print(f"[CHANNEL] Simulated packet corruption for message from {client_address} (seq={sequence_num})")
+                    # For corrupted packets, we should send a NACK
+                    nack_packet = self.create_packet(NACK_TYPE, f"NACK - packet corrupted", sequence_num=sequence_num)
+                    client_socket.sendall(nack_packet)
+                    continue
+
+                # Process message based on type
                 if message_type == DATA_TYPE:
-                    try:
-                        decoded_message = payload.decode('utf-8')
-                        print(f"[LOG] Received message from {client_address}: {decoded_message}")
-                    except UnicodeDecodeError:
-                        print(f"[LOG] Received binary data from {client_address}: {len(payload)} bytes")
+                    self.handle_message(client_socket, client_address, processed_payload, sequence_num)
+                    continue
 
-                    if self.protocol == 'gbn':
-                        ack_packet = self.create_packet(ACK_TYPE, "ACK for GBN")
-                    elif self.protocol == 'sr':
-                        ack_packet = self.create_packet(ACK_TYPE, f"ACK for {sequence_num}")
-                    else:
-                        ack_packet = self.create_packet(ACK_TYPE, "ACK")
-
-                    client_socket.sendall(ack_packet)
-
-                elif message_type == DISCONNECT_TYPE:
+                if message_type == DISCONNECT_TYPE:
                     if self.handle_disconnect(client_socket, client_address):
                         break
 
@@ -182,155 +313,82 @@ class Server(NetworkDevice):
                 print(f"[ERROR] Error handling messages from {client_address}: {e}")
                 break
 
+        # Clean up if not already done
         if client_address in self.client_sessions:
             del self.client_sessions[client_address]
+            print(f"[LOG] Removed session for {client_address}")
 
         try:
             client_socket.close()
+            print(f"[LOG] Closed connection with {client_address}")
         except:
             pass
 
     def start(self):
+        """Initialize the server, bind to socket, and begin listening for connections"""
         try:
             self._socket.bind((self.host, self.port))
             self._socket.listen(5)
-            print(f'Server started on {self.host}:{self.port}')
-            print(f'Operation mode: {self.operation_mode}, Max packet size: {self.max_size} bytes')
+            print(f'[LOG] Server started on {self.host}:{self.port}')
+            print(f'[LOG] Protocol: {self.protocol}, Max fragment size: {self.max_fragment_size} characters')
+            print(f'[LOG] Window size: {self.window_size} packets')
 
             while True:
-                result = self._socket.accept()
-                client_socket = result[0]
-                addr = result[1]
+                client_socket , addr = self._socket.accept()
                 client_address = f"{addr[0]}:{addr[1]}"
-                print(f'New connection from: {client_address}')
+                print(f'[LOG] New connection from: {client_address}')
 
                 if self.process_handshake(client_socket, client_address):
                     self.handle_client_messages(client_socket, client_address)
                     continue
 
-                print(f"Handshake failed with {client_address}")
+                print(f"[ERROR] Handshake failed with {client_address}")
                 client_socket.close()
+                
         except KeyboardInterrupt:
-            print("Server shutting down...")
+            print("[LOG] Server shutting down gracefully...")
+        except Exception as e:
+            print(f"[ERROR] Server error: {e}")
         finally:
             self._socket.close()
-
-
-    def simulate_channel(self, data):
-        """
-        Simula um canal com perdas e erros.
-        :param data: Dados recebidos (bytes)
-        :return: Dados possivelmente alterados ou None (em caso de perda)
-        """
-        loss_probability = 0.1  # 10% de chance de perda
-        error_probability = 0.1  # 10% de chance de erro
-
-        # Simular perda de pacote
-        if random.random() < loss_probability:
-            print("[LOG] Pacote perdido!")
-            return None
-
-        # Simular erro no pacote
-        if random.random() < error_probability:
-            print("[LOG] Pacote corrompido!")
-            data = bytearray(data)
-            index = random.randint(0, len(data) - 1)
-            data[index] = (data[index] + random.randint(1, 255)) % 256
-            return bytes(data)
-
-        return data
-
-
-    def handle_client_messages(self, client_socket: socket.socket, client_address):
-        while client_address in self.client_sessions:
-            try:
-                # Receber cabeçalho
-                header = client_socket.recv(11)
-                if not header or len(header) < 11:
-                    print(f"[ERROR] Incomplete or missing header from {client_address}")
-                    break
-
-                # Parse do cabeçalho
-                try:
-                    payload_length, message_type, sequence_num, checksum = struct.unpack('!IBH4s', header)
-                except struct.error as e:
-                    print(f"[ERROR] Failed to unpack header from {client_address}: {e}")
-                    break
-
-                # Receber payload
-                payload = client_socket.recv(payload_length)
-                if len(payload) < payload_length:
-                    print(f"[ERROR] Incomplete payload received from {client_address}")
-                    break
-
-                # Simular canal de perdas e erros
-                payload = self.simulate_channel(payload)
-                if payload is None:
-                    print(f"[LOG] Packet from {client_address} lost in simulated channel.")
-                    nack_packet = self.create_packet(NACK_TYPE, "NACK - packet lost")
-                    client_socket.sendall(nack_packet)
-                    continue  # Pacote perdido, não processa
-
-                # Processar mensagem com base no tipo
-                if message_type == DATA_TYPE:
-                    try:
-                        decoded_message = payload.decode('utf-8')
-                        print(f"[LOG] Received message from {client_address}: {decoded_message}")
-                    except UnicodeDecodeError:
-                        print(f"[LOG] Received binary data from {client_address}: {len(payload)} bytes")
-
-                    # Enviar ACK
-                    if self.protocol == 'gbn':
-                        ack_packet = self.create_packet(ACK_TYPE, "ACK for GBN")
-                    elif self.protocol == 'sr':
-                        ack_packet = self.create_packet(ACK_TYPE, f"ACK for {sequence_num}")
-                    else:
-                        ack_packet = self.create_packet(ACK_TYPE, "ACK")
-
-                    client_socket.sendall(ack_packet)
-                    print(f"[LOG] Sent ACK to {client_address}")
-
-                elif message_type == DISCONNECT_TYPE:
-                    if self.handle_disconnect(client_socket, client_address):
-                        print(f"[LOG] Client {client_address} disconnected successfully.")
-                        break
-
-                else:
-                    print(f"[ERROR] Unknown message type {message_type} from {client_address}")
-
-            except Exception as e:
-                print(f"[ERROR] Error handling messages from {client_address}: {e}")
-                break
-
-        # Limpeza
-        if client_address in self.client_sessions:
-            del self.client_sessions[client_address]
-
-        try:
-            client_socket.close()
-            print(f"[LOG] Connection with {client_address} closed.")
-        except Exception as e:
-            print(f"[ERROR] Failed to close connection with {client_address}: {e}")
+            print("[LOG] Server socket closed")
 
 
 if __name__ == '__main__':
     try:
-            # Parse command line arguments
+        # Parse command line arguments
         parser = argparse.ArgumentParser(description='Custom Protocol Server')
         parser.add_argument('--host', default='127.0.0.1', help='Host address to bind')
         parser.add_argument('--port', type=int, default=5000, help='Port to listen on')
-        parser.add_argument('--max-size', type=int, default=1024, help='Maximum packet size')
-        parser.add_argument('--operation-mode', choices=['step-by-step', 'burst'],
-                                default='step-by-step', help='Operation mode')
+        parser.add_argument('--max-fragment-size', type=int, default=3, help='Maximum fragment size')
+        parser.add_argument('--protocol', choices=['gbn', 'sr'], default='gbn',
+                            help='Reliable transfer protocol (Go-Back-N or Selective Repeat)')
+        parser.add_argument('--window-size', type=int, default=4,
+                            help='Sliding window size (number of packets in flight)')
     
         args = parser.parse_args()
     
         # Start server with provided arguments
-        server = Server(host=args.host,
-                        port=args.port,
-                        max_size=args.max_size,
-                        operation_mode=args.operation_mode)
+        server = Server(
+            host=args.host,
+            port=args.port,
+            max_fragment_size=args.max_fragment_size,
+            protocol=args.protocol,
+            window_size=args.window_size
+        )
+        
+        # Use lazy loading for ServerTerminalUI to avoid circular imports
+        # Only import and use it when we actually need it
+        from terminal_ui import ServerTerminalUI
+        
+        # Create server terminal UI
+        server_ui = ServerTerminalUI(server)
+        
+        # Display server status
+        server_ui.show_server_status()
+        
+        # Start the server
         server.start()
     
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"[ERROR] An error occurred: {e}")

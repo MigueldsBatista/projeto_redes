@@ -364,3 +364,58 @@ def parse_packet(self, packet):
 5. **Socket closure**: Both client and server close their sockets
 
 This implementation provides a robust foundation for a custom protocol that can be extended with additional features like encryption, compression, or more sophisticated error recovery mechanisms.
+
+## Function Reference
+
+### NetworkDevice Class (network_device.py)
+
+Base class for both client and server implementations:
+
+- **__init__(server_addr, server_port, operation_mode, max_size)**: Initializes the device with connection parameters.
+- **create_packet(message_type, payload, sequence_num, checksum)**: Creates a packet with the specified message type, payload data, sequence number, and checksum.
+- **parse_packet(packet)**: Parses a received packet, extracting and validating its components (type, sequence, payload, length).
+- **handle_packet(data_type, payload)**: Creates and sends a packet of the specified type with the given payload.
+- **calculate_checksum(data)**: Calculates a simple checksum for data integrity verification.
+- **simulate_channel(data)**: Simulates network conditions with packet loss and corruption for testing reliability features.
+
+### Client Class (client.py)
+
+Handles client-side communication with the server:
+
+- **__init__(server_addr, server_port, operation_mode, max_size, protocol)**: Initializes the client with connection parameters and protocol type (GBN or SR).
+- **connect()**: Establishes a connection with the server using the three-way handshake protocol.
+- **send_message(message)**: Fragments messages into smaller chunks and sends them to the server with error handling and retry logic.
+- **disconnect()**: Terminates the connection with the server gracefully.
+- **run_interactive_session()**: Provides a command-line interface for user interaction with the protocol.
+
+### Server Class (server.py)
+
+Manages server-side communication and client connections:
+
+- **__init__(host, port, max_size, operation_mode)**: Initializes the server with binding parameters.
+- **handle_syn(client_socket, client_address, data)**: Processes SYN requests during the handshake, negotiating connection parameters.
+- **handle_ack(client_address, data)**: Processes ACK messages to complete the handshake.
+- **handle_message(client_socket, client_address, data_bytes)**: Processes data messages received from clients.
+- **handle_disconnect(client_socket, client_address)**: Handles client disconnection requests.
+- **process_handshake(client_socket, client_address)**: Manages the complete three-way handshake process.
+- **start()**: Initializes the server, binds to the socket, and begins listening for connections.
+- **handle_client_messages(client_socket, client_address)**: Continuously receives and processes messages from a connected client.
+
+## Protocol Features and Implementation Status
+
+[✅] Resolver erros ao rodar incialemnte o codigo
+[✅] Colocar retornos com log no client
+[✅] Checagem de ack esta mocada
+[✅] Usuario poder escolher protocolo de comunicacao (repeticao seletiva e gobackn) /////// +
+[✅] Ver diferencas no retorno dos acks a depender do protocolo
+[✅] Usuario poder escoher tamanho da mensagem (limite
+de 3 caracteres -> o de vcs ta 1024)
+[✅] Caso exceda o limite, o client deve partir a mensagem em pacotes menores   /////// +
+[] Fazer janela deslizante baseado no ack recebido
+
+
+- notas
+
+funcao simulate channel existe mas só ta sendo usada no server e não no client
+
+não tiraram operation_mode do código, então ainda parece estar mockado a questão do step by step e do max_size = 1024
