@@ -267,6 +267,8 @@ class Server(NetworkDevice):
                 payload = self.simulate_channel(payload)
                 if payload is None:
                     print(f"[LOG] Packet from {client_address} lost in simulated channel.")
+                    nack_packet = self.create_packet(NACK_TYPE, "NACK - packet lost")
+                    client_socket.sendall(nack_packet)
                     continue  # Pacote perdido, não processa
 
                 # Processar mensagem com base no tipo

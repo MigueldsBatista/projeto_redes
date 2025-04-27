@@ -6,7 +6,7 @@ import random
 from network_device import NetworkDevice
 from settings import *
 
-NACK_TYPE = 0x04  # Tipo de pacote para NACK
+NACK_TYPE = 0x04  # NACK type
 
 class Client(NetworkDevice):
     def __init__(self, server_addr='127.0.0.1', server_port=5000, operation_mode='step-by-step', max_size=1024, protocol='gbn'):
@@ -78,44 +78,49 @@ class Client(NetworkDevice):
         try:
             if not self.handshake_complete or not self._socket:
                 raise ConnectionError("Cannot send message: Not connected")
-
             # Ensure the message is a string
             if not isinstance(message, str):
                 raise ValueError("Message must be a string")
-
             # Fragment the message into chunks of 3 characters
             fragments = [message[i:i+3] for i in range(0, len(message), 3)]
-
             for fragment in fragments:
                 encoded_message = fragment.encode('utf-8')
-
+                
                 # Calculate checksum
                 checksum = self.calculate_checksum(encoded_message)
-
+                
                 # Create packet with checksum
                 data_packet = self.create_packet(DATA_TYPE, encoded_message, checksum=checksum)
-                print(f"[LOG] Sending fragment: {fragment} with checksum: {checksum}")
-                self._socket.sendall(data_packet)
-
-                # Wait for ACK or NACK
-                response_packet = self._socket.recv(1024)
-                if not response_packet:
-                    raise ConnectionError("No response received")
-
-                parsed = self.parse_packet(response_packet)
-                if not parsed:
-                    raise ValueError("Invalid response from server")
-
-                if parsed['type'] == ACK_TYPE:
-                    print("[LOG] Server message: ACK received")
-                elif parsed['type'] == NACK_TYPE:
-                    print("[LOG] Server message: NACK received, resending fragment")
-                    continue  # Resend the fragment
-
+    
+                while True: # I created this loop to fix the NACK error.
+                            # Earlier today, I noticed a bug where the code would "stop"
+                            # when a NACK was received, so I created this loop
+                            # to fix that bug.
+                    print(f"[LOG] Sending fragment: {fragment} with checksum: {checksum}")
+                    self._socket.sendall(data_packet)
+    
+                    # Wait for ACK or NACK
+                    response_packet = self._socket.recv(1024)
+                    if not response_packet:
+                        raise ConnectionError("No response received")
+    
+                    parsed = self.parse_packet(response_packet)
+                    if not parsed:
+                        raise ValueError("Invalid response from server")
+    
+                    if parsed['type'] == ACK_TYPE:
+                        print("[LOG] Server message: ACK received")
+                        break 
+                    elif parsed['type'] == NACK_TYPE:
+                        print("[LOG] Server message: NACK received, pacote perdido, reenviando fragmento")
+                        # Continue the loop until is resend the NACK fragment
+                        continue
+                    
             return True
         except Exception as e:
             print(f"[ERROR] Failed to send message: {e}")
             return False
+
 
     def disconnect(self):
         try:
