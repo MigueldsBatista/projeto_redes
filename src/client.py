@@ -24,6 +24,33 @@ class Client(NetworkDevice):
         # Simulation mode - for deterministic outcomes
         self.simulation_mode = "normal"  # Options: normal, loss, corruption, delay
         
+    def display_sliding_window(self):
+        """Display the current sliding window status"""
+        if self.protocol == 'gbn':
+            # For GBN, window is [base, next_seq_num-1]
+            window_start = self.base_seq_num
+            window_end = window_start + self.window_size - 1
+            print(f"[WINDOW] GBN Window: [{window_start}-{window_end}]")
+            # Show which sequences are in flight
+            in_flight = list(range(self.base_seq_num, self.next_seq_num))
+            if in_flight:
+                print(f"[WINDOW] In-flight packets: {in_flight}")
+        else:
+            # For SR, window also includes base and window size
+            window_start = self.base_seq_num
+            window_end = window_start + self.window_size - 1
+            print(f"[WINDOW] SR Window: [{window_start}-{window_end}]")
+            # For SR, show which packets have been acked within the window
+            acked_in_window = [seq for seq in self.ack_received if window_start <= seq <= window_end]
+            if acked_in_window:
+                print(f"[WINDOW] Acked packets: {sorted(acked_in_window)}")
+            
+            # Show packets that haven't been acked yet
+            unacked = [seq for seq in range(window_start, min(self.next_seq_num, window_end + 1)) 
+                      if seq not in self.ack_received]
+            if unacked:
+                print(f"[WINDOW] Waiting for ACK: {unacked}")
+        
     def connect(self):
         """Establish a connection with the server using the three-way handshake protocol"""
         try:
@@ -92,8 +119,7 @@ class Client(NetworkDevice):
         # Check if we've exceeded maximum retries
         if self.retry_count > self.max_retries:
             print(f"[ERROR] Maximum retries ({self.max_retries}) exceeded. Message delivery failed.")
-            # We could raise an exception here, but instead we'll let the send_message method
-            # handle this by checking retry_count in its loop
+            # We'll let the send_message method handle this by checking retry_count in its loop
             return
         
         if self.protocol == 'gbn':
@@ -103,13 +129,13 @@ class Client(NetworkDevice):
                 if seq in self.packet_buffer:
                     print(f"[LOG] Resending packet with sequence number {seq}")
                     self._socket.sendall(self.packet_buffer[seq])
+            return
         
-        elif self.protocol == 'sr':
-            # Selective Repeat: Resend only unacknowledged packets
-            for seq in range(self.base_seq_num, self.next_seq_num):
-                if seq not in self.ack_received and seq in self.packet_buffer:
-                    print(f"[LOG] Resending packet with sequence number {seq}")
-                    self._socket.sendall(self.packet_buffer[seq])
+        # Selective Repeat: Resend only unacknowledged packets
+        for seq in range(self.base_seq_num, self.next_seq_num):
+            if seq not in self.ack_received and seq in self.packet_buffer:
+                print(f"[LOG] Resending packet with sequence number {seq}")
+                self._socket.sendall(self.packet_buffer[seq])
 
     def send_message(self, message):
         """Fragment and send a message using sliding window protocol with simulation modes"""
@@ -145,6 +171,9 @@ class Client(NetworkDevice):
                     print(f"[ERROR] Failed to send message after {self.max_retries} attempts")
                     return False
                 
+                # Display current sliding window
+                self.display_sliding_window()
+                
                 # Send packets within the window
                 while self.next_seq_num < len(fragments) and self.next_seq_num < self.base_seq_num + self.window_size:
                     fragment = fragments[self.next_seq_num]
@@ -168,90 +197,14 @@ class Client(NetworkDevice):
                     self.next_seq_num += 1
                 
                 # Try to receive ACKs (non-blocking)
-                try:
-                    while True:
-                        response_packet = self._socket.recv(self.BUFFER_SIZE)
-                        if not response_packet:
-                            break
-                        
-                        parsed = self.parse_packet(response_packet)
-                        if not parsed:
-                            continue
-                        
-                        if parsed['type'] == ACK_TYPE:
-                            if self.protocol == 'gbn':
-                                # Go-Back-N: Move the base forward
-                                ack_seq = parsed.get('sequence', 0)
-                                print(f"[LOG] Received ACK for sequence {ack_seq}")
-                                
-                                if ack_seq >= self.base_seq_num:
-                                    # Update the base sequence number
-                                    old_base = self.base_seq_num
-                                    self.base_seq_num = ack_seq + 1
-                                    
-                                    # Clean up the buffer for acknowledged packets
-                                    for seq in range(old_base, self.base_seq_num):
-                                        if seq in self.packet_buffer:
-                                            del self.packet_buffer[seq]
-                                    
-                                    # Update last action time
-                                    last_action_time = time.time()
-                                
-                            elif self.protocol == 'sr':
-                                # Selective Repeat: Mark the specific packet as acknowledged
-                                ack_seq = parsed.get('sequence', 0)
-                                print(f"[LOG] Received ACK for sequence {ack_seq}")
-                                
-                                # Mark this packet as acknowledged
-                                self.ack_received.add(ack_seq)
-                                
-                                # Move the base if possible
-                                while self.base_seq_num in self.ack_received:
-                                    # Clean up the buffer for the base packet
-                                    if self.base_seq_num in self.packet_buffer:
-                                        del self.packet_buffer[self.base_seq_num]
-                                    
-                                    self.base_seq_num += 1
-                                
-                                # Update last action time
-                                last_action_time = time.time()
-                        
-                        elif parsed['type'] == NACK_TYPE:
-                            if self.protocol == 'gbn':
-                                # Go-Back-N: Resend all packets from base to next_seq_num - 1
-                                print("[LOG] Received NACK, resending window")
-                                for seq in range(self.base_seq_num, self.next_seq_num):
-                                    if seq in self.packet_buffer:
-                                        print(f"[LOG] Resending packet {seq}")
-                                        self._socket.sendall(self.packet_buffer[seq])
-                                
-                                # Update last action time
-                                last_action_time = time.time()
-                            
-                            elif self.protocol == 'sr':
-                                # Selective Repeat: Resend only the NACKed packet
-                                nack_seq = parsed.get('sequence', 0)
-                                print(f"[LOG] Received NACK for sequence {nack_seq}")
-                                
-                                if nack_seq in self.packet_buffer:
-                                    print(f"[LOG] Resending packet {nack_seq}")
-                                    self._socket.sendall(self.packet_buffer[nack_seq])
-                                    
-                                # Update last action time
-                                last_action_time = time.time()
-                
-                except BlockingIOError:
-                    # No more data to read, this is expected
-                    pass
-                except Exception as e:
-                    print(f"[ERROR] Error receiving ACK: {e}")
+                self.process_acks(last_action_time)
                 
                 # Check for timeout - if no action has occurred for the timeout period
                 if time.time() - last_action_time > self.timeout and self.base_seq_num < self.next_seq_num:
                     self.handle_timeout()
                     last_action_time = time.time()  # Reset after handling timeout
                     
-                    # NEW CODE: Break out of the loop if max retries exceeded after timeout
+                    # Break out of the loop if max retries exceeded after timeout
                     if self.retry_count > self.max_retries:
                         print(f"[ERROR] Maximum retries ({self.max_retries}) exceeded after timeout. Aborting message send.")
                         break
@@ -270,15 +223,105 @@ class Client(NetworkDevice):
             if self.retry_count <= self.max_retries:
                 print(f"[LOG] Message sent successfully in {len(fragments)} fragments")
                 return True
-            else:
-                return False
+            
+            return False
         
         except Exception as e:
             print(f"[ERROR] Failed to send message: {e}")
             # Set the socket back to blocking mode in case of error
             if self._socket:
-                self._socket.setblocking(True)
+                try:
+                    self._socket.setblocking(True)
+                except:
+                    pass
             return False
+
+    def process_acks(self, last_action_time):
+        """Helper method to process acknowledgments"""
+        try:
+            while True:
+                response_packet = self._socket.recv(self.BUFFER_SIZE)
+                if not response_packet:
+                    break
+                
+                parsed = self.parse_packet(response_packet)
+                if not parsed:
+                    continue
+                
+                if parsed['type'] == ACK_TYPE:
+                    self.handle_ack(parsed, last_action_time)
+                elif parsed['type'] == NACK_TYPE:
+                    self.handle_nack(parsed, last_action_time)
+        
+        except BlockingIOError:
+            # No more data to read, this is expected
+            pass
+        except Exception as e:
+            print(f"[ERROR] Error receiving ACK: {e}")
+    
+    def handle_ack(self, parsed, last_action_time):
+        """Process an acknowledgment packet"""
+        ack_seq = parsed.get('sequence', 0)
+        
+        if self.protocol == 'gbn':
+            # Go-Back-N: Move the base forward
+            print(f"[LOG] Received ACK for sequence {ack_seq}")
+            
+            if ack_seq < self.base_seq_num:
+                # Duplicate or old ACK, ignore
+                return
+                
+            # Update the base sequence number
+            old_base = self.base_seq_num
+            self.base_seq_num = ack_seq + 1
+            
+            # Clean up the buffer for acknowledged packets
+            for seq in range(old_base, self.base_seq_num):
+                if seq in self.packet_buffer:
+                    del self.packet_buffer[seq]
+            
+            # Display window update
+            print(f"[WINDOW] Window moved: [{old_base}-{old_base + self.window_size - 1}] → [{self.base_seq_num}-{self.base_seq_num + self.window_size - 1}]")
+            return
+            
+        # Selective Repeat: Mark the specific packet as acknowledged
+        print(f"[LOG] Received ACK for sequence {ack_seq}")
+        
+        # Mark this packet as acknowledged
+        self.ack_received.add(ack_seq)
+        
+        # Move the base if possible
+        old_base = self.base_seq_num
+        while self.base_seq_num in self.ack_received:
+            # Clean up the buffer for the base packet
+            if self.base_seq_num in self.packet_buffer:
+                del self.packet_buffer[self.base_seq_num]
+            
+            self.base_seq_num += 1
+        
+        # Display window update if it moved
+        if old_base != self.base_seq_num:
+            print(f"[WINDOW] Window moved: [{old_base}-{old_base + self.window_size - 1}] → [{self.base_seq_num}-{self.base_seq_num + self.window_size - 1}]")
+    
+    def handle_nack(self, parsed, last_action_time):
+        """Process a negative acknowledgment packet"""
+        nack_seq = parsed.get('sequence', 0)
+        
+        if self.protocol == 'gbn':
+            # Go-Back-N: Resend all packets from base to next_seq_num - 1
+            print("[LOG] Received NACK, resending window")
+            for seq in range(self.base_seq_num, self.next_seq_num):
+                if seq in self.packet_buffer:
+                    print(f"[LOG] Resending packet {seq}")
+                    self._socket.sendall(self.packet_buffer[seq])
+            return
+            
+        # Selective Repeat: Resend only the NACKed packet
+        print(f"[LOG] Received NACK for sequence {nack_seq}")
+        
+        if nack_seq in self.packet_buffer:
+            print(f"[LOG] Resending packet {nack_seq}")
+            self._socket.sendall(self.packet_buffer[nack_seq])
 
     def disconnect(self):
         """Terminate the connection with the server gracefully"""

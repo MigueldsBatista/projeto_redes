@@ -16,6 +16,32 @@ class Server(NetworkDevice):
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
+    def display_sliding_window(self, client_address):
+        """Display the current sliding window for a client session"""
+        if client_address not in self.client_sessions:
+            return
+            
+        session = self.client_sessions[client_address]
+        protocol = session.get('protocol', 'gbn')
+        expected = session.get('expected_seq_num', 0)
+        window_size = session.get('window_size', self.window_size)
+        
+        if protocol == 'gbn':
+            # For GBN, window is [expected, expected+window_size-1]
+            start = expected
+            end = start + window_size - 1
+            print(f"[WINDOW] GBN Window: [{start}-{end}]")
+        else:
+            # For SR, window includes expected seq num and window size
+            start = expected
+            end = start + window_size - 1
+            print(f"[WINDOW] SR Window: [{start}-{end}]")
+            
+            # For SR, also show which packets are buffered
+            buffered = sorted(session.get('received_buffer', {}).keys())
+            if buffered:
+                print(f"[WINDOW] Buffered packets: {buffered}")
+
     def handle_syn(self, client_socket: socket.socket, client_address:str, data:dict):
         """Process SYN request during handshake and negotiate connection parameters"""
         print(f'[LOG] Received SYN from {client_address}: {data}')
@@ -62,11 +88,12 @@ class Server(NetworkDevice):
     def handle_ack(self, client_address:str, data:dict):
         """Process final ACK to complete handshake"""
         print(f'[LOG] Received ACK from {client_address}: {data}')
-        if client_address in self.client_sessions:
-            self.client_sessions[client_address]['handshake_complete'] = True
-            print(f'[LOG] Handshake completed for client {client_address}')
-            return True
-        return False
+        if client_address not in self.client_sessions:
+            return False
+            
+        self.client_sessions[client_address]['handshake_complete'] = True
+        print(f'[LOG] Handshake completed for client {client_address}')
+        return True
 
     def handle_message(self, client_socket:socket.socket, client_address:str, data_bytes:bytes, sequence_num=0):
         """Process data messages from client"""
@@ -79,6 +106,9 @@ class Server(NetworkDevice):
         protocol = session.get('protocol', 'gbn')
         
         try:
+            # Display the current sliding window before processing
+            self.display_sliding_window(client_address)
+            
             # Process the message based on protocol
             if protocol == 'gbn':
                 return self.handle_gbn_message(client_socket, client_address, data_bytes, sequence_num)
@@ -96,25 +126,8 @@ class Server(NetworkDevice):
             # Decode message for logging
             decoded_message = data_bytes.decode('utf-8')
             
-            # If the sequence number matches what we expect, accept it
-            if sequence_num == expected_seq:
-                print(f'[LOG] GBN: Received expected fragment {sequence_num}: "{decoded_message}"')
-                
-                # Process the message (in a real application, this would do something with the data)
-                # Here we just print it and acknowledge
-                
-                # Update expected sequence number
-                session['expected_seq_num'] = expected_seq + 1
-                session['last_ack_sent'] = expected_seq
-                
-                # Send ACK for the received packet
-                ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
-                client_socket.sendall(ack_packet)
-                print(f'[LOG] GBN: Sent ACK for sequence {sequence_num}')
-                
-                return True
-            else:
-                # In GBN, if we receive an out-of-order packet, we ignore it and resend the last ACK
+            # If the sequence number doesn't match what we expect, ignore it and resend the last ACK
+            if sequence_num != expected_seq:
                 print(f'[LOG] GBN: Received out-of-order fragment {sequence_num}, expected {expected_seq}')
                 
                 # Only ACK up to the last in-order packet received
@@ -122,24 +135,45 @@ class Server(NetworkDevice):
                 ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {last_ack}", sequence_num=last_ack)
                 client_socket.sendall(ack_packet)
                 print(f'[LOG] GBN: Resent ACK for sequence {last_ack}')
-                
                 return False
+            
+            # If we reach here, the sequence number matches what we expect
+            print(f'[LOG] GBN: Received expected fragment {sequence_num}: "{decoded_message}"')
+            
+            # Update expected sequence number
+            session['expected_seq_num'] = expected_seq + 1
+            session['last_ack_sent'] = expected_seq
+            
+            # Send ACK for the received packet
+            ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
+            client_socket.sendall(ack_packet)
+            print(f'[LOG] GBN: Sent ACK for sequence {sequence_num}')
+            
+            # Display updated window
+            self.display_sliding_window(client_address)
+            
+            return True
                 
         except UnicodeDecodeError:
             print(f'[LOG] Received binary data from {client_address} (seq={sequence_num}): {len(data_bytes)} bytes')
-            # Handle binary data similarly
-            if sequence_num == expected_seq:
-                session['expected_seq_num'] = expected_seq + 1
-                session['last_ack_sent'] = expected_seq
-                
-                ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
-                client_socket.sendall(ack_packet)
-                return True
-            else:
+            
+            # Handle binary data with early return
+            if sequence_num != expected_seq:
                 last_ack = session['last_ack_sent']
                 ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {last_ack}", sequence_num=last_ack)
                 client_socket.sendall(ack_packet)
                 return False
+            
+            session['expected_seq_num'] = expected_seq + 1
+            session['last_ack_sent'] = expected_seq
+            
+            ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
+            client_socket.sendall(ack_packet)
+            
+            # Display updated window
+            self.display_sliding_window(client_address)
+            
+            return True
     
     def handle_sr_message(self, client_socket:socket.socket, client_address:str, data_bytes:bytes, sequence_num=0):
         """Handle Selective Repeat protocol message"""
@@ -163,16 +197,10 @@ class Server(NetworkDevice):
             print(f'[LOG] SR: Sent ACK for sequence {sequence_num}')
             
             # Process consecutive packets in the buffer
-            while expected_seq in buffer:
-                # Process the packet data (in a real application, do something with it)
-                print(f'[LOG] SR: Processing buffered message {expected_seq}')
-                
-                # Remove from buffer and update expected sequence number
-                del buffer[expected_seq]
-                expected_seq += 1
+            self.process_sr_buffer(client_address)
             
-            # Update the expected sequence number
-            session['expected_seq_num'] = expected_seq
+            # Display updated window
+            self.display_sliding_window(client_address)
             
             return True
                 
@@ -186,29 +214,49 @@ class Server(NetworkDevice):
             client_socket.sendall(ack_packet)
             
             # Process consecutive packets in the buffer
-            while expected_seq in buffer:
-                del buffer[expected_seq]
-                expected_seq += 1
+            self.process_sr_buffer(client_address)
             
-            session['expected_seq_num'] = expected_seq
+            # Display updated window
+            self.display_sliding_window(client_address)
             
             return True
+
+    def process_sr_buffer(self, client_address):
+        """Helper method to process buffered packets for Selective Repeat"""
+        if client_address not in self.client_sessions:
+            return
+            
+        session = self.client_sessions[client_address]
+        expected_seq = session['expected_seq_num']
+        buffer = session['received_buffer']
+        
+        # Process consecutive packets in the buffer
+        while expected_seq in buffer:
+            # Process the packet data (in a real application, do something with it)
+            print(f'[LOG] SR: Processing buffered message {expected_seq}')
+            
+            # Remove from buffer and update expected sequence number
+            del buffer[expected_seq]
+            expected_seq += 1
+        
+        # Update the expected sequence number
+        session['expected_seq_num'] = expected_seq
 
     def handle_disconnect(self, client_socket:socket.socket, client_address:str):
         """Process client disconnect request"""
         print(f'[LOG] Client disconnecting: {client_address}')
-        if client_address in self.client_sessions:
-            ack_packet = self.create_packet(ACK_TYPE, "Disconnect acknowledged")
-            try:
-                client_socket.sendall(ack_packet)
-                print(f'[LOG] Sent disconnect acknowledgment to {client_address}')
-            except:
-                print(f'[LOG] Failed to send disconnect acknowledgment to {client_address}')
-                
-            del self.client_sessions[client_address]
-            return True
+        if client_address not in self.client_sessions:
+            return False
             
-        return False
+        ack_packet = self.create_packet(ACK_TYPE, "Disconnect acknowledged")
+        try:
+            client_socket.sendall(ack_packet)
+            print(f'[LOG] Sent disconnect acknowledgment to {client_address}')
+        except:
+            print(f'[LOG] Failed to send disconnect acknowledgment to {client_address}')
+            
+        del self.client_sessions[client_address]
+        return True
 
     def process_handshake(self, client_socket: socket.socket, client_address: str):
         """Manage the complete three-way handshake process"""
@@ -252,11 +300,11 @@ class Server(NetworkDevice):
 
             # Complete handshake
             data = json.loads(parsed['payload'])
-            if self.handle_ack(client_address, data):
-                print(f"[LOG] Handshake completed with {client_address}")
-                return True
-
-            return False
+            if not self.handle_ack(client_address, data):
+                return False
+                
+            print(f"[LOG] Handshake completed with {client_address}")
+            return True
             
         except Exception as e:
             print(f"[ERROR] Error in handshake with {client_address}: {e}")
