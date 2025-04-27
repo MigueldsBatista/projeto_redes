@@ -54,7 +54,7 @@ class TerminalUI:
             self.clear_screen()
 
         print("[LOG] Interactive session ended. Disconnecting...")
-        self.client.disconnect()
+        self.client.disconnect() # type: ignore
         
     def show_main_menu(self):
         """Display the main menu options"""

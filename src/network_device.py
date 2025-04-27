@@ -6,16 +6,7 @@ import time
 
 class NetworkDevice:
     def __init__(self, server_addr:str, server_port:int, protocol='gbn', max_fragment_size=3, window_size=4):
-        """
-        Initialize a network device with connection parameters.
-        
-        Args:
-            server_addr: Server address for connection
-            server_port: Server port for connection
-            protocol: Protocol type ('gbn' or 'sr') for reliable data transfer
-            max_fragment_size: Maximum message fragment size (defaults to 3 characters)
-            window_size: Size of the sliding window (number of packets in flight)
-        """
+
         # Minimum buffer size for receiving packets (header + max payload)
         self.BUFFER_SIZE = 1024
         
@@ -49,10 +40,9 @@ class NetworkDevice:
         self._socket:socket.socket #DO NOT ASSIGN HERE, IT WILL BE ASSIGNED IN THE CONNECT METHOD
 
     def calculate_checksum(self, data):
-        """Calculate a simple checksum for data integrity verification"""
-        # Return the checksum as bytes to match the expected type in create_packet
-        checksum_value = sum(data) % 256
-        return checksum_value.to_bytes(4, byteorder='big')
+        """Calculate a checksum for data integrity verification using MD5"""
+        # Use MD5 for a more robust checksum
+        return hashlib.md5(data).digest()[:4]  # 4-byte checksum
         
     def create_packet(self, message_type, payload, sequence_num=0, checksum=None):
         """Create a packet with header and payload"""
@@ -154,7 +144,11 @@ class NetworkDevice:
         # Otherwise, use random chance
         
         # Simulate packet loss (always lose if probability is 1.0)
-        if self.loss_probability == 1.0 or (self.loss_probability > 0.0 and random.random() < self.loss_probability):
+        if (self.loss_probability == 1.0 or
+            (self.loss_probability > 0.0
+            and
+            random.random() < self.loss_probability
+            )):
             print(f"[CHANNEL] Packet lost in transmission (seq={packet_index})!")
             return None
 
