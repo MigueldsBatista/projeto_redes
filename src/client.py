@@ -197,10 +197,7 @@ class Client(NetworkDevice):
     def fragment_message(self, message):
         """Fragment the message into smaller chunks based on max_fragment_size"""
         fragments = []
-        start = 0
-        stop = self.max_fragment_size
-        step = self.max_fragment_size
-        for i in range(start, stop, step):
+        for i in range(0, len(message), self.max_fragment_size):
             fragment = message[i:i + self.max_fragment_size]
             fragments.append(fragment)
         return fragments

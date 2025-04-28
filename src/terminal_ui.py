@@ -20,32 +20,36 @@ class TerminalUI:
         
     def run_interactive_session(self):
         """Main entry point that orchestrates the user interface"""
+        self.clear_screen()
+        #entao tava testando o codigo e vi que nao era possivel mudar o
+        #tipo do protocolo pois o handshake era unico, entao nao faz
+        #sentido ter uma opcao de mudar o protocolo no nosso menu e
+        #sim se ele quiser mudar o protocolo ele deve fazer uma nova
+        #conexao com o servidor
+        print("\n===== Configure Protocol Before Connection =====")
+        self.configure_protocol_menu()
+
         if not self.client.connect():
             print("[ERROR] Unable to establish connection. Exiting...")
             return
-        
-        self.clear_screen()
-        print("\n===== Interactive Network Protocol Client =====")
-        
+        self.clear_screen()        
         while True:
             self.show_main_menu()
-            choice = input("\nSelect an option (1-7): ").strip()
+            choice = input("\nSelect an option (1-6): ").strip()
             
             if choice == '1':
                 self.send_message_menu()
             elif choice == '2':
-                self.configure_protocol_menu()
-            elif choice == '3':
                 self.configure_window_menu() 
-            elif choice == '4':
+            elif choice == '3':
                 self.configure_simulation_menu()
-            elif choice == '5':
+            elif choice == '4':
                 self.show_status()
                 input("\nPress Enter to continue...")
-            elif choice == '6':
+            elif choice == '5':
                 self.reset_simulation()
                 input("\nSimulation reset to normal mode. Press Enter to continue...")
-            elif choice == '7':
+            elif choice == '6':
                 break
             else:
                 print("[ERROR] Invalid option. Please try again.")
@@ -59,13 +63,13 @@ class TerminalUI:
     def show_main_menu(self):
         """Display the main menu options"""
         print("\n===== MAIN MENU =====")
+        print("Your current protocol {}".format(self.client.protocol.upper()))
         print("1. Send Message")
-        print("2. Configure Protocol (current: {})".format(self.client.protocol.upper()))
-        print("3. Configure Window Size (current: {})".format(self.client.window_size))
-        print("4. Configure Simulation Mode (current: {})".format(self.client.simulation_mode.capitalize()))
-        print("5. Show Status")
-        print("6. Reset Simulation")
-        print("7. Exit")
+        print("2. Configure Window Size (current: {})".format(self.client.window_size))
+        print("3. Configure Simulation Mode (current: {})".format(self.client.simulation_mode.capitalize()))
+        print("4. Show Status")
+        print("5. Reset Simulation")
+        print("6. Exit")
         
     def send_message_menu(self):
         """Menu for sending messages with different simulation options"""
@@ -84,27 +88,28 @@ class TerminalUI:
         
     def configure_protocol_menu(self):
         """Menu for configuring the protocol type"""
-        self.clear_screen()
-        print("\n===== CONFIGURE PROTOCOL =====")
-        print("1. Go-Back-N (GBN)")
-        print("2. Selective Repeat (SR)")
-        print("3. Back to Main Menu")
-        
-        choice = input("\nSelect protocol (1-3): ").strip()
-        
-        if choice == '1':
-            self.client.protocol = 'gbn'
-            self.client.connection_params['protocol'] = 'gbn'
-            print("[CONFIG] Protocol set to Go-Back-N (GBN)")
-        elif choice == '2':
-            self.client.protocol = 'sr'
-            self.client.connection_params['protocol'] = 'sr'
-            print("[CONFIG] Protocol set to Selective Repeat (SR)")
-        elif choice == '3':
-            return
-        else:
-            print("[ERROR] Invalid option.")
-            
+        while True:
+            self.clear_screen()
+            print("\n===== CONFIGURE PROTOCOL =====")
+            print("1. Go-Back-N (GBN)")
+            print("2. Selective Repeat (SR)")
+
+            choice = input("\nSelect protocol (1-2): ").strip()
+
+            if choice == '1':
+                self.client.protocol = 'gbn'
+                self.client.connection_params['protocol'] = 'gbn'
+                print("[CONFIG] Protocol set to Go-Back-N (GBN)")
+                break
+            elif choice == '2':
+                self.client.protocol = 'sr'
+                self.client.connection_params['protocol'] = 'sr'
+                print("[CONFIG] Protocol set to Selective Repeat (SR)")
+                break
+            else:
+                print("[ERROR] Invalid option. Please select a valid protocol.")
+                input("\nPress Enter to try again...")
+
         input("\nPress Enter to continue...")
         
     def configure_window_menu(self):
