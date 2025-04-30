@@ -4,7 +4,7 @@ import socket
 from client import Client
 # Remove the direct import from server
 from typing import TYPE_CHECKING
-#comentando só pra testar uma coisa minha
+
 # Use conditional imports to prevent circular dependencies
 if TYPE_CHECKING:
     from server import Server
