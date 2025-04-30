@@ -4,7 +4,7 @@ import argparse
 import time
 from network_device import NetworkDevice
 from settings import *
-#testando meus 
+#ultimo teste de vez
 class Client(NetworkDevice):
     def __init__(self, server_addr='127.0.0.1', server_port=5000, protocol='gbn', max_fragment_size=3, window_size=4):
         # Call parent constructor with the new parameter name
