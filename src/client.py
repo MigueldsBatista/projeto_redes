@@ -143,6 +143,14 @@ class Client(NetworkDevice):
                 print(f"[LOG] Resending packet with sequence number {seq}")
                 self._socket.sendall(self.packet_buffer[seq])
 
+    def calculate_checksum(self, data):
+        """
+        Calcula um checksum simples para os dados.
+        :param data: Dados (bytes)
+        :return: Checksum (int)
+        """
+        return sum(data) % 256
+
     def send_message(self, message):
         """Fragment and send a message using sliding window protocol with simulation modes"""
         try:

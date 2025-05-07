@@ -4,6 +4,8 @@ import argparse
 import json
 from network_device import NetworkDevice
 from settings import *
+import random
+import struct
 # We'll remove the direct import of ServerTerminalUI to avoid circular dependencies
 
 
@@ -186,51 +188,55 @@ class Server(NetworkDevice):
             
             return True
     
-    def handle_sr_message(self, client_socket:socket.socket, client_address:str, data_bytes:bytes, sequence_num=0):
-        """Handle Selective Repeat protocol message"""
+    def handle_sr_message(self, client_socket: socket.socket, client_address: str, data_bytes: bytes, sequence_num=0):
+        """
+        Handle Selective Repeat protocol message.
+        """
         session = self.client_sessions[client_address]
         expected_seq = session['expected_seq_num']
         buffer = session['received_buffer']
-        
+
         try:
             # Decode message for logging
             decoded_message = data_bytes.decode('utf-8')
-            
-            # In SR, we accept and buffer out-of-order packets
             print(f'[LOG] SR: Received fragment {sequence_num}: "{decoded_message}"')
-            
+
             # Store the packet in the buffer
             buffer[sequence_num] = data_bytes
-            
+
             # Send ACK for the received packet
             ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
             client_socket.sendall(ack_packet)
             print(f'[LOG] SR: Sent ACK for sequence {sequence_num}')
-            
+
             # Process consecutive packets in the buffer
             self.process_sr_buffer(client_address)
-            
+
             # Display updated window
             self.display_sliding_window(client_address)
-            
+
             return True
-                
+
         except UnicodeDecodeError:
             print(f'[LOG] SR: Received binary data from {client_address} (seq={sequence_num}): {len(data_bytes)} bytes')
-            
+
             # Handle binary data
             buffer[sequence_num] = data_bytes
-            
+
             ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
             client_socket.sendall(ack_packet)
-            
+
             # Process consecutive packets in the buffer
             self.process_sr_buffer(client_address)
-            
+
             # Display updated window
             self.display_sliding_window(client_address)
-            
+
             return True
+
+        except Exception as e:
+            print(f"[ERROR] SR: Error handling message from {client_address}: {e}")
+            return False
 
     def process_sr_buffer(self, client_address):
         """Helper method to process buffered packets for Selective Repeat"""
