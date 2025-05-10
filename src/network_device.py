@@ -40,9 +40,9 @@ class NetworkDevice:
         self._socket:socket.socket #DO NOT ASSIGN HERE, IT WILL BE ASSIGNED IN THE CONNECT METHOD
 
     def calculate_checksum(self, data):
-        """Calculate a checksum for data integrity verification using MD5"""
-        # Use MD5 for a more robust checksum
-        return hashlib.md5(data).digest()[:4]  # 4-byte checksum
+       def calculate_checksum(self, data):
+        """Calculate a checksum for the given data"""
+        return hashlib.md5(data).hexdigest()
         
     def create_packet(self, message_type, payload, sequence_num=0, checksum=None):
         """Create a packet with header and payload"""

@@ -10,37 +10,32 @@ if TYPE_CHECKING:
     from server import Server
 
 class TerminalUI:
-    def __init__(self, client:Client):
+    def __init__(self, client: Client):
         """Initialize the terminal UI with a reference to the client"""
         self.client = client
 
     def clear_screen(self):
         """Clear the terminal screen"""
         os.system('cls' if os.name == 'nt' else 'clear')
-        
+
     def run_interactive_session(self):
         """Main entry point that orchestrates the user interface"""
         self.clear_screen()
-        #entao tava testando o codigo e vi que nao era possivel mudar o
-        #tipo do protocolo pois o handshake era unico, entao nao faz
-        #sentido ter uma opcao de mudar o protocolo no nosso menu e
-        #sim se ele quiser mudar o protocolo ele deve fazer uma nova
-        #conexao com o servidor
         print("\n===== Configure Protocol Before Connection =====")
         self.configure_protocol_menu()
 
         if not self.client.connect():
             print("[ERROR] Unable to establish connection. Exiting...")
             return
-        self.clear_screen()        
+        self.clear_screen()
         while True:
             self.show_main_menu()
             choice = input("\nSelect an option (1-6): ").strip()
-            
+
             if choice == '1':
                 self.send_message_menu()
             elif choice == '2':
-                self.configure_window_menu() 
+                self.configure_window_menu()
             elif choice == '3':
                 self.configure_simulation_menu()
             elif choice == '4':
@@ -54,12 +49,12 @@ class TerminalUI:
             else:
                 print("[ERROR] Invalid option. Please try again.")
                 input("\nPress Enter to continue...")
-            
+
             self.clear_screen()
 
         print("[LOG] Interactive session ended. Disconnecting...")
-        self.client.disconnect() # type: ignore
-        
+        self.client.disconnect()  # type: ignore
+
     def show_main_menu(self):
         """Display the main menu options"""
         print("\n===== MAIN MENU =====")
@@ -70,22 +65,26 @@ class TerminalUI:
         print("4. Show Status")
         print("5. Reset Simulation")
         print("6. Exit")
-        
+
     def send_message_menu(self):
-        """Menu for sending messages with different simulation options"""
+        """Menu for sending a message"""
         self.clear_screen()
         print("\n===== SEND MESSAGE =====")
         message = input("Enter message to send: ")
-        
+
         if not message:
             print("[ERROR] Message cannot be empty.")
             input("\nPress Enter to continue...")
             return
-            
+
         print("\nSending message in {} simulation mode...".format(self.client.simulation_mode.capitalize()))
-        self.client.send_message(message)
+        success = self.client.send_message(message)
+        if success:
+            print("[LOG] Message sent successfully!")
+        else:
+            print("[ERROR] Failed to send the message.")
         input("\nPress Enter to continue...")
-        
+
     def configure_protocol_menu(self):
         """Menu for configuring the protocol type"""
         while True:
@@ -111,14 +110,14 @@ class TerminalUI:
                 input("\nPress Enter to try again...")
 
         input("\nPress Enter to continue...")
-        
+
     def configure_window_menu(self):
         """Menu for configuring the window size and timeout"""
         self.clear_screen()
         print("\n===== CONFIGURE WINDOW =====")
         print("Current window size: {}".format(self.client.window_size))
         print("Current timeout: {:.1f} seconds".format(self.client.timeout))
-        
+
         try:
             new_size = input("\nEnter new window size (1-10, or Enter to keep current): ").strip()
             if new_size:
@@ -129,7 +128,7 @@ class TerminalUI:
                     print(f"[CONFIG] Window size set to {new_size}")
                 else:
                     print("[ERROR] Window size must be between 1 and 10.")
-                
+
             new_timeout = input("Enter new timeout in seconds (0.1-10.0, or Enter to keep current): ").strip()
             if new_timeout:
                 new_timeout = float(new_timeout)
@@ -138,12 +137,12 @@ class TerminalUI:
                     print(f"[CONFIG] Timeout set to {new_timeout} seconds")
                 else:
                     print("[ERROR] Timeout must be between 0.1 and 10.0 seconds.")
-                    
+
         except ValueError:
             print("[ERROR] Invalid input. Values must be numbers.")
-            
+
         input("\nPress Enter to continue...")
-        
+
     def configure_simulation_menu(self):
         """Menu for configuring the simulation mode"""
         self.clear_screen()
@@ -153,9 +152,9 @@ class TerminalUI:
         print("3. Packet Corruption (100% corruption probability)")
         print("4. Network Delay (1 second delay)")
         print("5. Back to Main Menu")
-        
+
         choice = input("\nSelect simulation mode (1-5): ").strip()
-        
+
         if choice == '1':
             self.client.simulation_mode = "normal"
             loss_prob = corruption_prob = delay_prob = delay_time = 0.0
@@ -183,9 +182,9 @@ class TerminalUI:
             return
         else:
             print("[ERROR] Invalid option.")
-            
+
         input("\nPress Enter to continue...")
-        
+
     def show_status(self):
         """Display current protocol and simulation status"""
         self.clear_screen()
@@ -196,19 +195,19 @@ class TerminalUI:
         print(f"Fragment size: {self.client.max_fragment_size} characters")
         print(f"Base sequence: {self.client.base_seq_num}")
         print(f"Next sequence: {self.client.next_seq_num}")
-        
+
         print("\n===== SIMULATION STATUS =====")
         print(f"Simulation mode: {self.client.simulation_mode.capitalize()}")
         print(f"Loss probability: {self.client.loss_probability:.2f}")
         print(f"Corruption probability: {self.client.corruption_probability:.2f}")
         print(f"Delay probability: {self.client.delay_probability:.2f}")
         print(f"Delay time: {self.client.delay_time:.2f}s")
-        
+
         print("\n===== CONNECTION STATUS =====")
         print(f"Connected: {'Yes' if self.client.handshake_complete else 'No'}")
         print(f"Server address: {self.client.server_addr}:{self.client.server_port}")
         print(f"Session ID: {self.client.session_id if self.client.session_id else 'N/A'}")
-        
+
     def reset_simulation(self):
         """Reset simulation to normal mode"""
         self.client.simulation_mode = "normal"
@@ -221,11 +220,11 @@ class ServerTerminalUI:
     def __init__(self, server):
         """Initialize the terminal UI with a reference to the server"""
         self.server = server
-        
+
     def clear_screen(self):
         """Clear the terminal screen"""
         os.system('cls' if os.name == 'nt' else 'clear')
-        
+
     def show_server_status(self):
         """Display current server status"""
         self.clear_screen()
@@ -234,7 +233,7 @@ class ServerTerminalUI:
         print(f"Protocol: {self.server.protocol.upper()}")
         print(f"Max Fragment Size: {self.server.max_fragment_size} characters")
         print(f"Window Size: {self.server.window_size} packets")
-        
+
         print("\n===== ACTIVE CONNECTIONS =====")
         if not self.server.client_sessions:
             print("No active connections")

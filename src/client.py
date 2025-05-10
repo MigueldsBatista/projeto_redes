@@ -4,6 +4,7 @@ import argparse
 import time
 from network_device import NetworkDevice
 from settings import *
+import hashlib
 #ultimo teste de vez
 class Client(NetworkDevice):
     def __init__(self, server_addr='127.0.0.1', server_port=5000, protocol='gbn', max_fragment_size=3, window_size=4):
@@ -106,6 +107,10 @@ class Client(NetworkDevice):
             print(f"[ERROR] Failed to connect: {e}")
             return False
 
+    def calculate_checkchecksum(self, data):
+        """Calculate a checksum for the given data"""
+        return hashlib.md5(data).hexdigest()
+    
     def handle_timeout(self):
         """Handle timeout for unacknowledged packets with limited retries"""
         # Prevent timeout spam by limiting how often we can time out
@@ -147,44 +152,53 @@ class Client(NetworkDevice):
             # Ensure the message is a string
             if not isinstance(message, str):
                 raise ValueError("Message must be a string")
-
+    
             self.reset_parameters()  # Reset parameters for new message
-
-            message = self.simulate_channel(message)
-
+    
             # Fragment the message into chunks based on max_fragment_size
             fragments = self.fragment_message(message)
             print(f"[LOG] Message fragmented into {len(fragments)} chunks of max size {self.max_fragment_size}")
             
-            # Set the socket to non-blocking mode for the sliding window
-            self._socket.setblocking(False)
+            # Send each fragment and handle ACK/NACK
+            for seq_num, fragment in enumerate(fragments):
+                while True:
+                    encoded_message = fragment.encode('utf-8')
+    
+                    # Calculate checksum
+                    checksum = self.calculate_checkchecksum(encoded_message)
+    
+                    # Create packet with sequence number and checksum
+                    data_packet = self.create_packet(DATA_TYPE, encoded_message, sequence_num=seq_num, checksum=checksum)
+                    print(f"[LOG] Sending fragment {seq_num+1}/{len(fragments)}: '{fragment}' (seq={seq_num})")
+                    self._socket.sendall(data_packet)
+    
+                    # Wait for ACK or NACK
+                    response_packet = self._socket.recv(self.BUFFER_SIZE)
+                    if not response_packet:
+                        raise ConnectionError("No response received")
+    
+                    parsed = self.parse_packet(response_packet)
+                    if not parsed:
+                        raise ValueError("Invalid response from server")
+    
+                    if parsed['type'] == ACK_TYPE and parsed['sequence'] == seq_num:
+                        print(f"[LOG] Server acknowledged fragment {seq_num}")
+                        break  # Move to the next fragment
+                    elif parsed['type'] == NACK_TYPE and parsed['sequence'] == seq_num:
+                        print(f"[LOG] Server requested retransmission for fragment {seq_num}")
+                        continue  # Retransmit the current fragment
+                    else:
+                        print(f"[ERROR] Unexpected response from server: {parsed}")
+                        raise ValueError("Unexpected response from server")
             
-            # Execute the sliding window protocol
-            success = self.execute_sliding_window(fragments)
-            
-            # Set the socket back to blocking mode
-            self._socket.setblocking(True)
-            
-            # Clean up
-            self.packet_buffer.clear()
-            self.ack_received.clear()
-            
-            # Report result
-            if success:
-                print(f"[LOG] Message sent successfully in {len(fragments)} fragments")
-            
-            return success
-        
+            print(f"[LOG] Message sent successfully in {len(fragments)} fragments")
+            return True
         except Exception as e:
             print(f"[ERROR] Failed to send message: {e}")
-            # Set the socket back to blocking mode in case of error
-            if self._socket:
-                try:
-                    self._socket.setblocking(True)
-                except:
-                    pass
             return False
 
+    
+    
     def reset_parameters(self):
         # Reset sequence numbers for this message
         self.base_seq_num = 0

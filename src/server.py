@@ -16,6 +16,10 @@ class Server(NetworkDevice):
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
+    def calculate_checksum(self, data):
+        """Calculate a checksum for the given data"""
+        return hashlib.md5(data).hexdigest()
+    
     def display_sliding_window(self, client_address):
         """Display the current sliding window for a client session"""
         if client_address not in self.client_sessions:
@@ -67,7 +71,8 @@ class Server(NetworkDevice):
             'socket': client_socket,
             'expected_seq_num': 0,  # For GBN
             'received_buffer': {},  # For SR
-            'last_ack_sent': -1     # For tracking ACKs
+            'last_ack_sent': -1,    # For tracking ACKs
+            'last_checksum': b''   # Initialize last_checksum to avoid KeyError
         }
         
         # Prepare SYN-ACK response with negotiated parameters
@@ -95,27 +100,33 @@ class Server(NetworkDevice):
         print(f'[LOG] Handshake completed for client {client_address}')
         return True
 
-    def handle_message(self, client_socket:socket.socket, client_address:str, data_bytes:bytes, sequence_num=0):
+    def handle_message(self, client_address, data_bytes, sequence_num=0):
         """Process data messages from client"""
-        # Verify handshake is complete
-        if not self.client_sessions.get(client_address, {}).get('handshake_complete', False):
-            print(f'[ERROR] Rejected message from {client_address}: Handshake not complete')
-            return
-            
-        session = self.client_sessions[client_address]
-        protocol = session.get('protocol', 'gbn')
-        
         try:
-            # Display the current sliding window before processing
-            self.display_sliding_window(client_address)
-            
-            # Process the message based on protocol
-            if protocol == 'gbn':
-                return self.handle_gbn_message(client_socket, client_address, data_bytes, sequence_num)
-            elif protocol == 'sr':
-                return self.handle_sr_message(client_socket, client_address, data_bytes, sequence_num)
+            # Decode the message
+            decoded_message = data_bytes.decode('utf-8')
+
+            # Verify checksum
+            calculated_checksum = self.calculate_checksum(data_bytes)
+            last_checksum = self.client_sessions[client_address].get('last_checksum', '')
+
+            if calculated_checksum != last_checksum:
+                print(f"[LOG] Checksum mismatch for fragment {sequence_num} from {client_address}")
+                nack_packet = self.create_packet(NACK_TYPE, "Checksum mismatch", sequence_num=sequence_num)
+                self.client_sessions[client_address]['socket'].sendall(nack_packet)
+                return
+
+            print(f"[LOG] Received fragment {sequence_num} from {client_address}: '{decoded_message}'")
+
+            # Send ACK
+            ack_packet = self.create_packet(ACK_TYPE, "ACK", sequence_num=sequence_num)
+            self.client_sessions[client_address]['socket'].sendall(ack_packet)
+
+            # Update expected sequence number
+            self.client_sessions[client_address]['expected_seq_num'] += 1
+            self.client_sessions[client_address]['last_checksum'] = calculated_checksum
         except Exception as e:
-            print(f"[ERROR] Error handling message: {e}")
+            print(f"[ERROR] Error handling message from {client_address}: {e}")
             
     def handle_gbn_message(self, client_socket:socket.socket, client_address:str, data_bytes:bytes, sequence_num=0):
         """Handle Go-Back-N protocol message"""
