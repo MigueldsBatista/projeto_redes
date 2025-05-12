@@ -144,13 +144,10 @@ class Client(NetworkDevice):
                 self._socket.sendall(self.packet_buffer[seq])
 
     def calculate_checksum(self, data):
-        """
-        Calcula um checksum simples para os dados.
-        :param data: Dados (bytes)
-        :return: Checksum (int)
-        """
-        return sum(data) % 256
-
+        """Calculate a checksum for data integrity verification using MD5"""
+        # Use MD5 for a more robust checksum
+        return hashlib.md5(data).digest()[:4]  # 4-byte checksum
+    
     def send_message(self, message):
         """Fragment and send a message using sliding window protocol with simulation modes"""
         try:
