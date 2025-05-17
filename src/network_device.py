@@ -145,7 +145,7 @@ class NetworkDevice:
                     continue
 
                 # Verify checksum
-                calculated_checksum = hashlib.md5(processed_payload).digest()[:4]
+                calculated_checksum = self.calculate_checksum(processed_payload)
                 if calculated_checksum != checksum:
                     print(f"[ERROR] Checksum mismatch for packet {sequence_num} from {client_address}")
                     if hasattr(self, 'simulate_corruption_and_nack'):

@@ -50,7 +50,7 @@ class Client(NetworkDevice):
             print(f"[WINDOW] Acked packets: {sorted(acked_in_window)}")
         
         # Show packets that haven't been acked yet
-        unacked = [seq for seq in range(window_start, min(self.next_seq_num, window_end + 1)) 
+        unacked = [seq for seq in range(window_start, min(self.next_seq_num, window_end + 1))
                     if seq not in self.ack_received]
         if unacked:
             print(f"[WINDOW] Waiting for ACK: {unacked}")
@@ -141,11 +141,6 @@ class Client(NetworkDevice):
                 print(f"[LOG] Resending packet with sequence number {seq}")
                 self._socket.sendall(self.packet_buffer[seq])
 
-    def calculate_checksum(self, data):
-        """Calculate a checksum for data integrity verification using MD5"""
-        # Use MD5 for a more robust checksum
-        return hashlib.md5(data).digest()[:4]  # 4-byte checksum
-    
     def send_message(self, message):
         """Fragment and send a message using sliding window protocol with simulation modes"""
         try:
@@ -158,8 +153,12 @@ class Client(NetworkDevice):
 
             self.reset_parameters()  # Reset parameters for new message
 
+            #FIXME: Não faz sentido pra mim ter isso aq
             message = self.simulate_channel(message)
-
+            if message is None:
+                print("[LOG] Message lost in simulated channel XX.")
+                return False
+            
             # Fragment the message into chunks based on max_fragment_size
             fragments = self.fragment_message(message)
             print(f"[LOG] Message fragmented into {len(fragments)} chunks of max size {self.max_fragment_size}")
@@ -189,88 +188,10 @@ class Client(NetworkDevice):
             if self._socket:
                 try:
                     self._socket.setblocking(True)
-                except:
+                except Exception:
                     pass
             return False
 
-    def simulate_channel(self, data):
-        # Simula um canal com perdas e erros
-        loss_probability = 0.1
-        error_probability = 0.1
-
-        if random.random() < loss_probability:
-            print("[LOG] Pacote perdido!")
-            return None
-
-        if random.random() < error_probability:
-            print("[LOG] Pacote corrompido!")
-            data = bytearray(data)
-            index = random.randint(0, len(data) - 1)
-            data[index] = (data[index] + random.randint(1, 255)) % 256
-            return bytes(data)
-
-        return data
-
-    def handle_client_messages(self, client_socket: socket.socket, client_address):
-        while client_address in self.client_sessions:
-            try:
-                header = client_socket.recv(11)
-                if not header or len(header) < 11:
-                    print(f"[ERROR] Incomplete or missing header from {client_address}")
-                    break
-
-                try:
-                    payload_length, message_type, sequence_num, checksum = struct.unpack('!IBH4s', header)
-                except struct.error as e:
-                    print(f"[ERROR] Failed to unpack header from {client_address}: {e}")
-                    break
-
-                payload = client_socket.recv(payload_length)
-                if len(payload) < payload_length:
-                    print(f"[ERROR] Incomplete payload received from {client_address}")
-                    break
-
-                payload = self.simulate_channel(payload)
-                if payload is None:
-                    print(f"[LOG] Packet from {client_address} lost in simulated channel.")
-                    continue
-
-                if message_type == DATA_TYPE:
-                    try:
-                        decoded_message = payload.decode('utf-8')
-                        print(f"[LOG] Received message from {client_address}: {decoded_message}")
-                    except UnicodeDecodeError:
-                        print(f"[LOG] Received binary data from {client_address}: {len(payload)} bytes")
-
-                    if self.protocol == 'gbn':
-                        ack_packet = self.create_packet(ACK_TYPE, "ACK for GBN")
-                    elif self.protocol == 'sr':
-                        ack_packet = self.create_packet(ACK_TYPE, f"ACK for {sequence_num}")
-                    else:
-                        ack_packet = self.create_packet(ACK_TYPE, "ACK")
-
-                    client_socket.sendall(ack_packet)
-                    print(f"[LOG] Sent ACK to {client_address}")
-
-                elif message_type == DISCONNECT_TYPE:
-                    if self.handle_disconnect(client_socket, client_address):
-                        print(f"[LOG] Client {client_address} disconnected successfully.")
-                        break
-                else:
-                    print(f"[ERROR] Unknown message type {message_type} from {client_address}")
-
-            except Exception as e:
-                print(f"[ERROR] Error handling messages from {client_address}: {e}")
-                break
-
-        if client_address in self.client_sessions:
-            del self.client_sessions[client_address]
-
-        try:
-            client_socket.close()
-            print(f"[LOG] Connection with {client_address} closed.")
-        except Exception as e:
-            print(f"[ERROR] Failed to close connection with {client_address}: {e}")
 
     def reset_parameters(self):
         # Reset sequence numbers for this message
