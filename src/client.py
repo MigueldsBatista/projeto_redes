@@ -48,7 +48,7 @@ class Client(NetworkDevice):
             print(f"[WINDOW] Acked packets: {sorted(acked_in_window)}")
         
         # Show packets that haven't been acked yet
-        unacked = [seq for seq in range(window_start, min(self.next_seq_num, window_end + 1)) 
+        unacked = [seq for seq in range(window_start, min(self.next_seq_num, window_end + 1))
                     if seq not in self.ack_received]
         if unacked:
             print(f"[WINDOW] Waiting for ACK: {unacked}")
@@ -143,11 +143,6 @@ class Client(NetworkDevice):
                 print(f"[LOG] Resending packet with sequence number {seq}")
                 self._socket.sendall(self.packet_buffer[seq])
 
-    def calculate_checksum(self, data):
-        """Calculate a checksum for data integrity verification using MD5"""
-        # Use MD5 for a more robust checksum
-        return hashlib.md5(data).digest()[:4]  # 4-byte checksum
-    
     def send_message(self, message):
         """Fragment and send a message using sliding window protocol with simulation modes"""
         try:
@@ -159,7 +154,13 @@ class Client(NetworkDevice):
                 raise ValueError("Message must be a string")
     
             self.reset_parameters()  # Reset parameters for new message
-    
+
+            #FIXME: Não faz sentido pra mim ter isso aq
+            message = self.simulate_channel(message)
+            if message is None:
+                print("[LOG] Message lost in simulated channel XX.")
+                return False
+            
             # Fragment the message into chunks based on max_fragment_size
             fragments = self.fragment_message(message)
             print(f"[LOG] Message fragmented into {len(fragments)} chunks of max size {self.max_fragment_size}")
@@ -200,10 +201,15 @@ class Client(NetworkDevice):
             return True
         except Exception as e:
             print(f"[ERROR] Failed to send message: {e}")
+            # Set the socket back to blocking mode in case of error
+            if self._socket:
+                try:
+                    self._socket.setblocking(True)
+                except Exception:
+                    pass
             return False
 
-    
-    
+
     def reset_parameters(self):
         # Reset sequence numbers for this message
         self.base_seq_num = 0
