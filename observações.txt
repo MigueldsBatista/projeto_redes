@@ -1,0 +1,1 @@
+o cliente agora envia um campo especial 99 que vai indicar se o canal possui algum erro

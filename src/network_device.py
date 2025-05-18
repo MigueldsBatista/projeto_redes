@@ -4,12 +4,8 @@ import hashlib
 import random
 import time
 import struct   
-
-# Define message types
-DISCONNECT_TYPE = 2  # Example value for disconnect type
-NACK_TYPE = 3  # Example value for NACK type
-ACK_TYPE = 1  # Example value for ACK type
-DATA_TYPE = 0  # Example value for data type
+from settings import *
+import json
 
 class NetworkDevice:
     def __init__(self, server_addr:str, server_port:int, protocol='gbn', max_fragment_size=3, window_size=4):
@@ -45,12 +41,13 @@ class NetworkDevice:
         self.delay_time = 0.0
         
         self._socket:socket.socket #DO NOT ASSIGN HERE, IT WILL BE ASSIGNED IN THE CONNECT METHOD
-
     def calculate_checksum(self, data):
-       def calculate_checksum(self, data):
         """Calculate a checksum for the given data"""
-        return hashlib.md5(data).hexdigest()
-        
+        # Return first 4 bytes of MD5 digest for consistent packet header checksum
+        if isinstance(data, str):
+            data = data.encode('utf-8')
+        return hashlib.md5(data).digest()[:4]
+    
     def create_packet(self, message_type, payload, sequence_num=0, checksum=None):
         """Create a packet with header and payload"""
         if isinstance(payload, str):
@@ -115,8 +112,17 @@ class NetworkDevice:
 
     def handle_client_messages(self, client_socket: socket.socket, client_address: str):
         """Continuously receive and process messages from a connected client."""
+        attempts = 0
         while client_address in self.client_sessions:
             try:
+
+                if attempts >= 5:
+                    print("[ERROR] Max attempt number reached, ending program execution")
+                    break
+
+                if attempts > 0:
+                    print(f"[INFO] Attempt number {attempts}")
+
                 # Receive header
                 header = client_socket.recv(self.HEADER_SIZE)
                 if not header or len(header) < self.HEADER_SIZE:
@@ -126,7 +132,7 @@ class NetworkDevice:
                 # Parse header
                 try:
                     payload_length, message_type, sequence_num, checksum = struct.unpack('!IBH4s', header)
-                except struct.error as e:
+                except struct.error     as e:
                     print(f"[ERROR] Failed to unpack header from {client_address}: {e}")
                     break
 
@@ -136,12 +142,29 @@ class NetworkDevice:
                     print(f"[ERROR] Incomplete payload received from {client_address}")
                     break
 
+                # Handle special channel config packet (message_type 99)
+                if message_type == ERROR_CODE:
+                    try:
+                        config = json.loads(payload.decode('utf-8'))
+                        print(f"[CONFIG] Received channel config from client: {config}")
+                        self.set_channel_conditions(
+                            loss_prob=float(config.get('loss_prob', 0.0)),
+                            corruption_prob=float(config.get('corruption_prob', 0.0)),
+                            delay_prob=float(config.get('delay_prob', 0.0)),
+                            delay_time=float(config.get('delay_time', 0.0))
+                        )
+                        print("[CONFIG] Channel conditions updated on server.")
+                    except Exception as e:
+                        print(f"[ERROR] Failed to parse channel config: {e}")
+                    continue
+
                 # Simulate channel conditions
                 processed_payload = self.simulate_channel(payload, sequence_num)
                 if processed_payload is None:
                     print(f"[CHANNEL] Packet from {client_address} lost in simulated channel.")
                     if hasattr(self, 'simulate_loss_and_nack'):
                         self.simulate_loss_and_nack(client_socket, sequence_num)
+                        attempts+=1
                     continue
 
                 # Verify checksum
@@ -150,6 +173,7 @@ class NetworkDevice:
                     print(f"[ERROR] Checksum mismatch for packet {sequence_num} from {client_address}")
                     if hasattr(self, 'simulate_corruption_and_nack'):
                         self.simulate_corruption_and_nack(client_socket, sequence_num, payload)
+                        attempts+=1
                     continue
 
                 # Process message based on type
@@ -164,7 +188,7 @@ class NetworkDevice:
                     ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
                     client_socket.sendall(ack_packet)
                     print(f"[LOG] Sent ACK for sequence {sequence_num}")
-
+                    attempts=0
                 elif message_type == DISCONNECT_TYPE:
                     if self.handle_disconnect(client_socket, client_address):
                         print(f"[LOG] Client {client_address} disconnected successfully.")

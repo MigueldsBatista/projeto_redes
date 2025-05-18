@@ -4,7 +4,7 @@ import argparse
 import time
 from network_device import NetworkDevice
 from settings import *
-import hashlib
+
 #ultimo teste de vez
 class Client(NetworkDevice):
     def __init__(self, server_addr='127.0.0.1', server_port=5000, protocol='gbn', max_fragment_size=3, window_size=4):
@@ -107,10 +107,6 @@ class Client(NetworkDevice):
             print(f"[ERROR] Failed to connect: {e}")
             return False
 
-    def calculate_checkchecksum(self, data):
-        """Calculate a checksum for the given data"""
-        return hashlib.md5(data).hexdigest()
-    
     def handle_timeout(self):
         """Handle timeout for unacknowledged packets with limited retries"""
         # Prevent timeout spam by limiting how often we can time out
@@ -155,12 +151,6 @@ class Client(NetworkDevice):
     
             self.reset_parameters()  # Reset parameters for new message
 
-            #FIXME: Não faz sentido pra mim ter isso aq
-            message = self.simulate_channel(message)
-            if message is None:
-                print("[LOG] Message lost in simulated channel XX.")
-                return False
-            
             # Fragment the message into chunks based on max_fragment_size
             fragments = self.fragment_message(message)
             print(f"[LOG] Message fragmented into {len(fragments)} chunks of max size {self.max_fragment_size}")
@@ -171,7 +161,7 @@ class Client(NetworkDevice):
                     encoded_message = fragment.encode('utf-8')
     
                     # Calculate checksum
-                    checksum = self.calculate_checkchecksum(encoded_message)
+                    checksum = self.calculate_checksum(encoded_message)
     
                     # Create packet with sequence number and checksum
                     data_packet = self.create_packet(DATA_TYPE, encoded_message, sequence_num=seq_num, checksum=checksum)
@@ -398,13 +388,17 @@ class Client(NetworkDevice):
         except Exception as e:
             print(f"[ERROR] Failed to disconnect: {e}")
 
+    def simulate_channel(self, data):
+        # Função removida: simulação de canal agora é feita apenas no servidor
+        raise NotImplementedError("A simulação de canal deve ser feita apenas no servidor.")
+
 
 if __name__ == '__main__':
     try:
         # Parse command line arguments
         parser = argparse.ArgumentParser(description='Custom Protocol Client')
-        parser.add_argument('--server-addr', default='127.0.0.1', help='Server address')
-        parser.add_argument('--server-port', type=int, default=5000, help='Server port')
+        parser.add_argument('--host', default='127.0.0.1', help='Server address')
+        parser.add_argument('--port', type=int, default=5000, help='Server port')
         parser.add_argument('--max-fragment-size', type=int, default=3, help='Maximum fragment size')
         parser.add_argument('--protocol', choices=['gbn', 'sr'], default='gbn', 
                            help='Reliable transfer protocol (Go-Back-N or Selective Repeat)')
@@ -415,8 +409,8 @@ if __name__ == '__main__':
 
         # Create client with provided arguments
         client = Client(
-            server_addr=args.server_addr,
-            server_port=args.server_port,
+            server_addr=args.host,
+            server_port=args.port,
             max_fragment_size=args.max_fragment_size,
             protocol=args.protocol,
             window_size=args.window_size

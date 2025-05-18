@@ -1,10 +1,8 @@
 import os
-import time
-import socket
 from client import Client
 # Remove the direct import from server
 from typing import TYPE_CHECKING
-
+import json
 # Use conditional imports to prevent circular dependencies
 if TYPE_CHECKING:
     from server import Server
@@ -40,7 +38,7 @@ class TerminalUI:
                 self.configure_simulation_menu()
             elif choice == '4':
                 self.show_status()
-                input("\nPress Enter to continue...")
+                xinput("\nPress Enter to continue...")
             elif choice == '5':
                 self.reset_simulation()
                 input("\nSimulation reset to normal mode. Press Enter to continue...")
@@ -155,33 +153,46 @@ class TerminalUI:
 
         choice = input("\nSelect simulation mode (1-5): ").strip()
 
+        # Default values
+        loss_prob = corruption_prob = delay_prob = delay_time = 0.0
+        mode = "normal"
         if choice == '1':
-            self.client.simulation_mode = "normal"
-            loss_prob = corruption_prob = delay_prob = delay_time = 0.0
-            self.client.set_channel_conditions(loss_prob, corruption_prob, delay_prob, delay_time)
-            print("[CONFIG] Simulation mode set to Normal")
+            mode = "normal"
         elif choice == '2':
-            self.client.simulation_mode = "loss"
+            mode = "loss"
             loss_prob = 1.0
-            corruption_prob = delay_prob = delay_time = 0.0
-            self.client.set_channel_conditions(loss_prob, corruption_prob, delay_prob, delay_time)
-            print("[CONFIG] Simulation mode set to Packet Loss (100%)")
         elif choice == '3':
-            self.client.simulation_mode = "corruption"
+            mode = "corruption"
             corruption_prob = 1.0
-            loss_prob = delay_prob = delay_time = 0.0
-            self.client.set_channel_conditions(loss_prob, corruption_prob, delay_prob, delay_time)
-            print("[CONFIG] Simulation mode set to Packet Corruption (100%)")
         elif choice == '4':
-            self.client.simulation_mode = "delay"
+            mode = "delay"
             delay_prob = delay_time = 1.0
-            loss_prob = corruption_prob = 0.0
-            self.client.set_channel_conditions(loss_prob, corruption_prob, delay_prob, delay_time)
-            print("[CONFIG] Simulation mode set to Network Delay (1 second)")
         elif choice == '5':
             return
         else:
             print("[ERROR] Invalid option.")
+            input("\nPress Enter to continue...")
+            return
+
+        # Update local simulation mode for UI only
+        self.client.simulation_mode = mode
+        print(f"[CONFIG] Simulation mode set to {mode.capitalize()}")
+
+        # Send configuration packet to server
+        try:
+            config_data = {
+                'type': 'channel_config',
+                'loss_prob': loss_prob,
+                'corruption_prob': corruption_prob,
+                'delay_prob': delay_prob,
+                'delay_time': delay_time
+            }
+            # Use a reserved message type, e.g., 99
+            config_packet = self.client.create_packet(99, json.dumps(config_data))
+            self.client._socket.sendall(config_packet)
+            print("[CONFIG] Channel configuration sent to server.")
+        except Exception as e:
+            print(f"[ERROR] Failed to send channel config to server: {e}")
 
         input("\nPress Enter to continue...")
 

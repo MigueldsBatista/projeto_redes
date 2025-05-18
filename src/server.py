@@ -4,8 +4,7 @@ import argparse
 import json
 from network_device import NetworkDevice
 from settings import *
-import random
-import struct
+
 # We'll remove the direct import of ServerTerminalUI to avoid circular dependencies
 
 
@@ -18,10 +17,6 @@ class Server(NetworkDevice):
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    def calculate_checksum(self, data):
-        """Calculate a checksum for the given data"""
-        return hashlib.md5(data).hexdigest()
-    
     def display_sliding_window(self, client_address):
         """Display the current sliding window for a client session"""
         if client_address not in self.client_sessions:
@@ -68,7 +63,7 @@ class Server(NetworkDevice):
             'protocol': client_protocol,
             'max_fragment_size': max_fragment_size,
             'window_size': requested_window_size,
-            'session_id': session_id,
+            'session_id': session_id,'127.0.0.1'
             'handshake_complete': False,
             'socket': client_socket,
             'expected_seq_num': 0,  # For GBN
@@ -189,7 +184,7 @@ if __name__ == '__main__':
     try:
         # Parse command line arguments
         parser = argparse.ArgumentParser(description='Custom Protocol Server')
-        parser.add_argument('--host', default='127.0.0.1', help='Host address to bind')
+        parser.add_argument('--host', default='0.0.0.0', help='Host address to bind')
         parser.add_argument('--port', type=int, default=5000, help='Port to listen on')
         parser.add_argument('--max-fragment-size', type=int, default=3, help='Maximum fragment size')
         parser.add_argument('--protocol', choices=['gbn', 'sr'], default='gbn',
