@@ -18,32 +18,6 @@ class Server(NetworkDevice):
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    def display_sliding_window(self, client_address):
-        """Display the current sliding window for a client session"""
-        if client_address not in self.client_sessions:
-            return
-            
-        session = self.client_sessions[client_address]
-        protocol = session.get('protocol', 'gbn')
-        expected = session.get('expected_seq_num', 0)
-        window_size = session.get('window_size', self.window_size)
-        
-        if protocol == 'gbn':
-            # For GBN, window is [expected, expected+window_size-1]
-            start = expected
-            end = start + window_size - 1
-            print(f"[WINDOW] GBN Window: [{start}-{end}]")
-        else:
-            # For SR, window includes expected seq num and window size
-            start = expected
-            end = start + window_size - 1
-            print(f"[WINDOW] SR Window: [{start}-{end}]")
-            
-            # For SR, also show which packets are buffered
-            buffered = sorted(session.get('received_buffer', {}).keys())
-            if buffered:
-                print(f"[WINDOW] Buffered packets: {buffered}")
-
     def handle_syn(self, client_socket: socket.socket, client_address:str, data:dict):
         """Process SYN request during handshake and negotiate connection parameters"""
         print(f'[LOG] Received SYN from {client_address}: {data}')
@@ -68,9 +42,6 @@ class Server(NetworkDevice):
             'handshake_complete': False,
             'socket': client_socket,
             'expected_seq_num': 0,  # For GBN
-            'received_buffer': {},  # For SR
-            'last_ack_sent': -1,    # For tracking ACKs
-            'last_checksum': b''   # Initialize last_checksum to avoid KeyError
         }
         
         # Prepare SYN-ACK response with negotiated parameters
@@ -101,55 +72,38 @@ class Server(NetworkDevice):
 
     def process_handshake(self, client_socket: socket.socket, client_address: str):
         """Manage the complete three-way handshake process"""
-        try:
-            # Receive initial SYN header - use proper buffer size
-            header = client_socket.recv(self.BUFFER_SIZE)
-            if not header or len(header) < self.HEADER_SIZE:
-                print(SERVER_ERRORS.INVALID_HEADER.format(client_address=client_address))
-                return False
+        # Let exceptions bubble up, handle/log in main loop
+        header = client_socket.recv(self.BUFFER_SIZE)
+        if not header or len(header) < self.HEADER_SIZE:
+            raise ValueError(SERVER_ERRORS.INVALID_HEADER.format(client_address=client_address))
 
-            # Parse header fields
-            parsed = self.parse_packet(header)
-            if not parsed:
-                print(SERVER_ERRORS.PARSE_PACKET.format(client_address=client_address))
-                return False
+        parsed = self.parse_packet(header)
+        if not parsed:
+            raise ValueError(SERVER_ERRORS.PARSE_PACKET.format(client_address=client_address))
 
-            # Verify message type is SYN
-            if parsed['type'] != settings.SYN_TYPE:
-                print(SERVER_ERRORS.EXPECTED_SYN.format(msg_type=parsed['type']))
-                return False
+        if parsed['type'] != settings.SYN_TYPE:
+            raise ValueError(SERVER_ERRORS.EXPECTED_SYN.format(msg_type=parsed['type']))
 
-            # Parse connection parameters
-            data = json.loads(parsed['payload'])
-            client_protocol = data.get('protocol', 'gbn')
-            print(f"[LOG] Client requesting protocol: {client_protocol}")
-            
-            # Process SYN and send SYN-ACK
-            self.handle_syn(client_socket, client_address, data)
+        data = json.loads(parsed['payload'])
+        client_protocol = data.get('protocol', 'gbn')
+        print(f"[LOG] Client requesting protocol: {client_protocol}")
+        self.handle_syn(client_socket, client_address, data)
 
-            # Wait for final ACK - use proper buffer size
-            header = client_socket.recv(self.BUFFER_SIZE)
-            parsed = self.parse_packet(header)
-            if not parsed:
-                print(SERVER_ERRORS.FAILED_ACK.format(client_address=client_address))
-                return False
+        # Wait for final ACK
+        header = client_socket.recv(self.BUFFER_SIZE)
+        parsed = self.parse_packet(header)
+        if not parsed:
+            raise ValueError(SERVER_ERRORS.FAILED_ACK.format(client_address=client_address))
 
-            # Verify message type is HANDSHAKE_ACK
-            if parsed['type'] != settings.HANDSHAKE_ACK_TYPE:
-                print(SERVER_ERRORS.EXPECTED_ACK.format(msg_type=parsed['type']))
-                return False
+        if parsed['type'] != settings.HANDSHAKE_ACK_TYPE:
+            raise ValueError(SERVER_ERRORS.EXPECTED_ACK.format(msg_type=parsed['type']))
 
-            # Complete handshake
-            data = json.loads(parsed['payload'])
-            if not self.handle_ack(client_address, data):
-                return False
-                
-            print(SERVER_LOGS.HANDSHAKE_COMPLETE.format(client_address=client_address))
-            return True
-            
-        except Exception as e:
-            print(SERVER_ERRORS.ERROR_HANDSHAKE.format(client_address=client_address, error=e))
-            return False
+        data = json.loads(parsed['payload'])
+        if not self.handle_ack(client_address, data):
+            raise ValueError(SERVER_ERRORS.FAILED_ACK.format(client_address=client_address))
+
+        print(SERVER_LOGS.HANDSHAKE_COMPLETE.format(client_address=client_address))
+        return True
 
     def start(self):
         """Initialize the server, bind to socket, and begin listening for connections"""
@@ -161,21 +115,24 @@ class Server(NetworkDevice):
             print(SERVER_LOGS.WINDOW.format(window_size=self.window_size))
 
             while True:
-                client_socket , addr = self._socket.accept()
-                client_address = f"{addr[0]}:{addr[1]}"
-                print(SERVER_LOGS.NEW_CONNECTION.format(client_address=client_address))
-
-                if self.process_handshake(client_socket, client_address):
-                    self.handle_client_messages(client_socket, client_address)
-                    continue
-
-                print(SERVER_ERRORS.HANDSHAKE_FAILED.format(client_address=client_address))
-                client_socket.close()
-                
-        except KeyboardInterrupt:
-            print("[LOG] Server shutting down gracefully...")
-        except Exception as e:
-            print(SERVER_ERRORS.SERVER_ERROR.format(error=e))
+                try:
+                    client_socket, addr = self._socket.accept()
+                    client_address = f"{addr[0]}:{addr[1]}"
+                    print(SERVER_LOGS.NEW_CONNECTION.format(client_address=client_address))
+                    try:
+                        if self.process_handshake(client_socket, client_address):
+                            self.handle_client_messages(client_socket, client_address)
+                    except (ConnectionError, ValueError) as e:
+                        print(e)
+                    except Exception as e:
+                        print(e)
+                    finally:
+                        client_socket.close()
+                except KeyboardInterrupt:
+                    print("[LOG] Server shutting down gracefully...")
+                    break
+                except Exception as e:
+                    print(f"[ERROR] Error accepting new connection: {e}")
         finally:
             self._socket.close()
             print(SERVER_LOGS.SOCKET_CLOSED)

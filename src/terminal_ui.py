@@ -22,8 +22,6 @@ class TerminalUI:
     def run_interactive_session(self):
         """Main entry point that orchestrates the user interface"""
         self.clear_screen()
-        print("\n===== Configure Protocol Before Connection =====")
-        self.configure_protocol_menu()
 
         if not self.client.connect():
             print("[ERROR] Unable to establish connection. Exiting...")
@@ -88,6 +86,9 @@ class TerminalUI:
 
     def configure_protocol_menu(self):
         """Menu for configuring the protocol type"""
+
+        print("\n===== Configure Protocol Before Connection =====")
+
         while True:
             self.clear_screen()
             print("\n===== CONFIGURE PROTOCOL =====")
@@ -179,6 +180,7 @@ class TerminalUI:
 
         # Update local simulation mode for UI only
         self.client.simulation_mode = mode
+        self.client.update_simulation_params(loss_prob, corruption_prob, delay_prob, delay_time)
         print(f"[CONFIG] Simulation mode set to {mode.capitalize()}")
 
         # Send configuration packet to server
@@ -197,7 +199,6 @@ class TerminalUI:
             print("[CONFIG] Channel configuration sent to server.")
         except Exception as e:
             print(f"[ERROR] Failed to send channel config to server: {e}")
-
         input("\nPress Enter to continue...")
 
     def show_status(self):
@@ -232,9 +233,8 @@ class TerminalUI:
         delay_time = 0
 
         self.client.set_channel_conditions(loss_prob, corruption_prob, delay_prob, delay_time)
-
+        self.client.update_simulation_params(loss_prob, corruption_prob, delay_prob, delay_time)
         self.client.connect()
-        
         config_data = {
             'type': 'channel_config',
             'loss_prob': loss_prob,
@@ -242,11 +242,9 @@ class TerminalUI:
             'delay_prob': delay_prob,
             'delay_time': delay_time
         }
-        
         # Use the reserved config message type, not DATA_TYPE, and do not set last_packet
         config_packet = self.client.create_packet(settings.ERROR_CODE, json.dumps(config_data))
         self.client._socket.sendall(config_packet)
-
         self.clear_screen()
         print("[CONFIG] Simulation reset to normal mode")
 

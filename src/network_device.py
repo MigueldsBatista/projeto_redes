@@ -300,6 +300,13 @@ class NetworkDevice:
         
         print(f"[CONFIG] Channel set to {mode} mode.")
 
+    def update_simulation_params(self, loss_prob=0.0, corruption_prob=0.0, delay_prob=0.0, delay_time=0.0):
+        """Update local simulation parameters for status display (client-side only)."""
+        self.loss_probability = loss_prob
+        self.corruption_probability = corruption_prob
+        self.delay_probability = delay_prob
+        self.delay_time = delay_time
+
 # Example usage of the NetworkDevice class
 device = NetworkDevice("127.0.0.1", 8080)
 device.set_channel_conditions(loss_prob=1.0)  # Simula 100% de perda de pacotes
