@@ -4,7 +4,7 @@ import hashlib
 import random
 import time
 import struct   
-from settings import *
+from src.core import settings
 import json
 
 class NetworkDevice:
@@ -99,7 +99,7 @@ class NetworkDevice:
         while client_address in self.client_sessions:
             try:
 
-                if attempts > MAX_RETRIES:
+                if attempts > settings.MAX_RETRIES:
                     print("[ERROR] Max attempts number reached, ending program execution...")
                     break
 
@@ -136,7 +136,7 @@ class NetworkDevice:
                 except Exception as e:
                     print(f"[ERROR] Failed to parse channel config: {e}")
 
-                if message_type == ERROR_CODE:
+                if message_type == settings.ERROR_CODE:
                     continue
 
                 # Simulate channel conditions
@@ -159,7 +159,7 @@ class NetworkDevice:
                     continue
 
                 # Process message based on type
-                if message_type == DATA_TYPE:
+                if message_type == settings.DATA_TYPE:
                     try:
                         decoded_message = self.simulate_channel(payload, sequence_num).decode('utf-8')
                         print(f"[LOG] Received message fragment from {client_address}: {decoded_message}")
@@ -167,11 +167,11 @@ class NetworkDevice:
                     except Exception:
                         print(f"[LOG] Received binary data from {client_address}: {len(payload)} bytes")
                         received_fragments.append(payload)
-                    ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
+                    ack_packet = self.create_packet(settings.ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
                     client_socket.sendall(ack_packet)
                     print(f"[LOG] Sent ACK for sequence {sequence_num}")
                     attempts = 0
-                    
+
                     if last_packet:
                         if all(isinstance(frag, str) for frag in received_fragments):
                             full_message = ''.join(received_fragments)
@@ -181,7 +181,7 @@ class NetworkDevice:
 
                         received_fragments = []
 
-                elif message_type == DISCONNECT_TYPE:
+                elif message_type == settings.DISCONNECT_TYPE:
                     if self.handle_disconnect(client_socket, client_address):
                         print(f"[LOG] Client {client_address} disconnected successfully.")
                         break
@@ -258,7 +258,7 @@ class NetworkDevice:
             # Simulate packet loss and send NACK
             def simulate_loss_and_nack(client_socket, sequence_num):
                 print(f"[CHANNEL] Simulating packet loss for sequence {sequence_num}")
-                nack_packet = self.create_packet(NACK_TYPE, f"NACK for seq {sequence_num}", sequence_num=sequence_num)
+                nack_packet = self.create_packet(settings.NACK_TYPE, f"NACK for seq {sequence_num}", sequence_num=sequence_num)
                 client_socket.sendall(nack_packet)
                 print(f"[LOG] Sent NACK for sequence {sequence_num}")
             
@@ -274,7 +274,7 @@ class NetworkDevice:
                 corrupted_payload = bytearray(payload)
                 if len(corrupted_payload) > 0:
                     corrupted_payload[0] = (corrupted_payload[0] + 1) % 256  # Corrupt the first byte
-                nack_packet = self.create_packet(NACK_TYPE, f"NACK for seq {sequence_num}", sequence_num=sequence_num)
+                nack_packet = self.create_packet(settings.NACK_TYPE, f"NACK for seq {sequence_num}", sequence_num=sequence_num)
                 client_socket.sendall(nack_packet)
                 print(f"[LOG] Sent NACK for sequence {sequence_num}")
             

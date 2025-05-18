@@ -3,5 +3,6 @@ o cliente agora envia um campo especial 99 que vai indicar se o canal possui alg
 checksum agora foi colocado dentro da função create_packet para evitar implementações erradas
 
 se acontecer um erro o servidor encerra a conexão com o cliente, sendo necessário reconectar
+* para isso o cliente possui a opção 5 de resetar o canal e os parâmetros de conexão
 
-criamos uma classe channels conditions que passa os valores de erro para o cliente e servidor
+adicionamos constantes

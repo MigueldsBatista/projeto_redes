@@ -1,12 +1,14 @@
 import os
-from client import Client
+from src.client import Client
 # Remove the direct import from server
 from typing import TYPE_CHECKING
 import json
-from settings import *
+
+from src.core import settings
+from src.constants.constants_client import CLIENT_LOGS, CLIENT_ERRORS
 # Use conditional imports to prevent circular dependencies
 if TYPE_CHECKING:
-    from server import Server
+    from src.server import Server
 
 class TerminalUI:
     def __init__(self, client: Client):
@@ -189,7 +191,7 @@ class TerminalUI:
                 'delay_time': delay_time
             }
             # Use a reserved message type, e.g., 99
-            config_packet = self.client.create_packet(ERROR_CODE, json.dumps(config_data))
+            config_packet = self.client.create_packet(settings.ERROR_CODE, json.dumps(config_data))
             self.client._socket.sendall(config_packet)
 
             print("[CONFIG] Channel configuration sent to server.")
@@ -240,8 +242,9 @@ class TerminalUI:
             'delay_prob': delay_prob,
             'delay_time': delay_time
         }
+        
         # Use the reserved config message type, not DATA_TYPE, and do not set last_packet
-        config_packet = self.client.create_packet(ERROR_CODE, json.dumps(config_data))
+        config_packet = self.client.create_packet(settings.ERROR_CODE, json.dumps(config_data))
         self.client._socket.sendall(config_packet)
 
         self.clear_screen()

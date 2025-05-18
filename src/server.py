@@ -2,8 +2,9 @@ import socket
 import hashlib
 import argparse
 import json
-from network_device import NetworkDevice
-from settings import *
+from src.network_device import NetworkDevice
+from src.core import settings
+from src.constants.constants_server import SERVER_LOGS, SERVER_ERRORS
 
 # We'll remove the direct import of ServerTerminalUI to avoid circular dependencies
 
@@ -83,7 +84,7 @@ class Server(NetworkDevice):
         }
         
         # Send SYN-ACK
-        packet = self.create_packet(ACK_TYPE, json.dumps(response))
+        packet = self.create_packet(settings.ACK_TYPE, json.dumps(response))
         client_socket.sendall(packet)
         return session_id
 
@@ -104,18 +105,18 @@ class Server(NetworkDevice):
             # Receive initial SYN header - use proper buffer size
             header = client_socket.recv(self.BUFFER_SIZE)
             if not header or len(header) < self.HEADER_SIZE:
-                print(f"[ERROR] Invalid header received from {client_address}")
+                print(SERVER_ERRORS.INVALID_HEADER.format(client_address=client_address))
                 return False
 
             # Parse header fields
             parsed = self.parse_packet(header)
             if not parsed:
-                print(f"[ERROR] Failed to parse packet from {client_address}")
+                print(SERVER_ERRORS.PARSE_PACKET.format(client_address=client_address))
                 return False
 
             # Verify message type is SYN
-            if parsed['type'] != SYN_TYPE:
-                print(f"[ERROR] Expected SYN but got message type {parsed['type']}")
+            if parsed['type'] != settings.SYN_TYPE:
+                print(SERVER_ERRORS.EXPECTED_SYN.format(msg_type=parsed['type']))
                 return False
 
             # Parse connection parameters
@@ -130,12 +131,12 @@ class Server(NetworkDevice):
             header = client_socket.recv(self.BUFFER_SIZE)
             parsed = self.parse_packet(header)
             if not parsed:
-                print(f"[ERROR] Failed to receive ACK from {client_address}")
+                print(SERVER_ERRORS.FAILED_ACK.format(client_address=client_address))
                 return False
 
             # Verify message type is HANDSHAKE_ACK
-            if parsed['type'] != HANDSHAKE_ACK_TYPE:
-                print(f"[ERROR] Expected HANDSHAKE_ACK but got message type {parsed['type']}")
+            if parsed['type'] != settings.HANDSHAKE_ACK_TYPE:
+                print(SERVER_ERRORS.EXPECTED_ACK.format(msg_type=parsed['type']))
                 return False
 
             # Complete handshake
@@ -143,11 +144,11 @@ class Server(NetworkDevice):
             if not self.handle_ack(client_address, data):
                 return False
                 
-            print(f"[LOG] Handshake completed with {client_address}")
+            print(SERVER_LOGS.HANDSHAKE_COMPLETE.format(client_address=client_address))
             return True
             
         except Exception as e:
-            print(f"[ERROR] Error in handshake with {client_address}: {e}")
+            print(SERVER_ERRORS.ERROR_HANDSHAKE.format(client_address=client_address, error=e))
             return False
 
     def start(self):
@@ -155,29 +156,29 @@ class Server(NetworkDevice):
         try:
             self._socket.bind((self.host, self.port))
             self._socket.listen(5)
-            print(f'[LOG] Server started on {self.host}:{self.port}')
-            print(f'[LOG] Protocol: {self.protocol}, Max fragment size: {self.max_fragment_size} characters')
-            print(f'[LOG] Window size: {self.window_size} packets')
+            print(SERVER_LOGS.START.format(host=self.host, port=self.port))
+            print(SERVER_LOGS.PROTOCOL.format(protocol=self.protocol, max_fragment_size=self.max_fragment_size))
+            print(SERVER_LOGS.WINDOW.format(window_size=self.window_size))
 
             while True:
                 client_socket , addr = self._socket.accept()
                 client_address = f"{addr[0]}:{addr[1]}"
-                print(f'[LOG] New connection from: {client_address}')
+                print(SERVER_LOGS.NEW_CONNECTION.format(client_address=client_address))
 
                 if self.process_handshake(client_socket, client_address):
                     self.handle_client_messages(client_socket, client_address)
                     continue
 
-                print(f"[ERROR] Handshake failed with {client_address}")
+                print(SERVER_ERRORS.HANDSHAKE_FAILED.format(client_address=client_address))
                 client_socket.close()
                 
         except KeyboardInterrupt:
             print("[LOG] Server shutting down gracefully...")
         except Exception as e:
-            print(f"[ERROR] Server error: {e}")
+            print(SERVER_ERRORS.SERVER_ERROR.format(error=e))
         finally:
             self._socket.close()
-            print("[LOG] Server socket closed")
+            print(SERVER_LOGS.SOCKET_CLOSED)
 
 
 if __name__ == '__main__':
@@ -205,7 +206,7 @@ if __name__ == '__main__':
         
         # Use lazy loading for ServerTerminalUI to avoid circular imports
         # Only import and use it when we actually need it
-        from terminal_ui import ServerTerminalUI
+        from src.terminal_ui import ServerTerminalUI
         
         # Create server terminal UI
         server_ui = ServerTerminalUI(server)

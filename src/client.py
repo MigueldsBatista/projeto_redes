@@ -2,8 +2,9 @@ import socket
 import json
 import argparse
 import time
-from network_device import NetworkDevice
-from settings import *
+from src.network_device import NetworkDevice
+from src.core import settings
+from src.constants.constants_client import CLIENT_LOGS, CLIENT_ERRORS
 
 #ultimo teste de vez
 class Client(NetworkDevice):
@@ -28,18 +29,18 @@ class Client(NetworkDevice):
         # For SR, window also includes base and window size
         window_start = self.base_seq_num
         window_end = window_start + self.window_size - 1
-        print(f"[WINDOW] SR Window: [{window_start}-{window_end}]")
+        print(CLIENT_LOGS.WINDOW_SR.format(window_start=window_start, window_end=window_end))
         # For SR, show which packets have been acked within the window
         acked_in_window = [seq for seq in self.ack_received if window_start <= seq <= window_end]
         if acked_in_window:
-            print(f"[WINDOW] Acked packets: {sorted(acked_in_window)}")
+            print(CLIENT_LOGS.WINDOW_ACKED.format(acked_in_window=sorted(acked_in_window)))
         
         # Show packets that haven't been acked yet
         unacked = [seq for seq in range(window_start, min(self.next_seq_num, window_end + 1))
                     if seq not in self.ack_received]
         if unacked:
-            print(f"[WINDOW] Waiting for ACK: {unacked}")
-        
+            print(CLIENT_LOGS.WINDOW_WAITING_ACK.format(unacked=unacked))
+    
     def connect(self):
         """Establish a connection with the server using the three-way handshake protocol"""
         try:
@@ -48,27 +49,27 @@ class Client(NetworkDevice):
             self._socket.connect((self.server_addr, self.server_port))
 
             # STEP 1: SYN - Client → Server
-            print(f"[LOG] Connected to server at {self.server_addr}:{self.server_port}")
-            print(f"[LOG] Sending SYN packet with protocol={self.protocol}, max_fragment_size={self.max_fragment_size}, window_size={self.window_size}...")
-            self.handle_packet(SYN_TYPE, json.dumps(self.connection_params))
+            print(CLIENT_LOGS.CONNECTED.format(server_addr=self.server_addr, server_port=self.server_port))
+            print(CLIENT_LOGS.SENDING_SYN.format(protocol=self.protocol, max_fragment_size=self.max_fragment_size, window_size=self.window_size))
+            self.handle_packet(settings.SYN_TYPE, json.dumps(self.connection_params))
 
             # STEP 2: Wait for SYN-ACK from Server
-            print("[LOG] Waiting for SYN-ACK from server...")
+            print(CLIENT_LOGS.WAIT_SYNACK)
             # Use proper buffer size for receiving complete packets
             response_packet = self._socket.recv(self.BUFFER_SIZE)
             if not response_packet:
-                raise ConnectionError("No response from server")
+                raise ConnectionError(CLIENT_ERRORS.NO_RESPONSE)
 
             parsed = self.parse_packet(response_packet)
             if not parsed:
-                raise ValueError("Invalid response from server")
+                raise ValueError(CLIENT_ERRORS.INVALID_RESPONSE)
 
             # Process SYN-ACK
             syn_ack_data = json.loads(parsed['payload'])
-            print(f"[LOG] Received SYN-ACK: {syn_ack_data}")
+            print(CLIENT_LOGS.RECEIVED_SYNACK.format(syn_ack_data=syn_ack_data))
 
             if syn_ack_data.get('status') != 'ok':
-                raise ConnectionError(f"Handshake failed: {syn_ack_data.get('message', 'Unknown error')}")
+                raise ConnectionError(CLIENT_ERRORS.HANDSHAKE_FAILED.format(message=syn_ack_data.get('message', 'Unknown error')))
 
             # Store session information
             self.session_id = syn_ack_data.get('session_id')
@@ -82,17 +83,17 @@ class Client(NetworkDevice):
             self.connection_params['window_size'] = self.window_size
 
             # STEP 3: ACK - Client → Server
-            print("[LOG] Sending final ACK packet...")
+            print(CLIENT_LOGS.SENDING_ACK)
             ack_data = {'session_id': self.session_id, 'message': 'Connection established'}
-            self.handle_packet(HANDSHAKE_ACK_TYPE, json.dumps(ack_data))
+            self.handle_packet(settings.HANDSHAKE_ACK_TYPE, json.dumps(ack_data))
 
             self.handshake_complete = True
             self.is_connected = True
-            print("[LOG] Handshake completed successfully!")
-            print(f"[LOG] Connection established with protocol={self.protocol}, max_fragment_size={self.max_fragment_size}, window_size={self.window_size}")
+            print(CLIENT_LOGS.HANDSHAKE_SUCCESS)
+            print(CLIENT_LOGS.CONNECTION_ESTABLISHED.format(protocol=self.protocol, max_fragment_size=self.max_fragment_size, window_size=self.window_size))
             return True
         except Exception as e:
-            print(f"[ERROR] Failed to connect: {e}")
+            print(CLIENT_ERRORS.FAILED_CONNECT.format(error=e))
             return False
 
     def handle_timeout(self):
@@ -108,40 +109,40 @@ class Client(NetworkDevice):
         
         # Check if we've exceeded maximum retries
         if self.retry_count > self.max_retries:
-            print(f"[ERROR] Maximum retries ({self.max_retries}) exceeded. Message delivery failed.")
+            print(CLIENT_ERRORS.MAX_RETRIES.format(max_retries=self.max_retries))
             # We'll let the send_message method handle this by checking retry_count in its loop
             return
         
         if self.protocol == 'gbn':
             # Go-Back-N: Resend all packets from base to next_seq_num - 1
-            print(f"[LOG] Timeout detected: Resending packets from {self.base_seq_num} to {self.next_seq_num-1} (Attempt {self.retry_count}/{self.max_retries})")
+            print(CLIENT_LOGS.TIMEOUT_RESEND.format(base_seq_num=self.base_seq_num, next_seq_num_minus1=self.next_seq_num-1, retry_count=self.retry_count, max_retries=self.max_retries))
             for seq in range(self.base_seq_num, self.next_seq_num):
                 if seq in self.packet_buffer:
-                    print(f"[LOG] Resending packet with sequence number {seq}")
+                    print(CLIENT_LOGS.RESENDING_PACKET.format(seq=seq))
                     self._socket.sendall(self.packet_buffer[seq])
             return
         
         # Selective Repeat: Resend only unacknowledged packets
         for seq in range(self.base_seq_num, self.next_seq_num):
             if seq not in self.ack_received and seq in self.packet_buffer:
-                print(f"[LOG] Resending packet with sequence number {seq}")
+                print(CLIENT_LOGS.RESENDING_PACKET.format(seq=seq))
                 self._socket.sendall(self.packet_buffer[seq])
 
     def send_message(self, message):
         """Fragment and send a message using sliding window protocol with simulation modes"""
         try:
             if not self.handshake_complete or not self._socket:
-                raise ConnectionError("Cannot send message: Not connected")
+                raise ConnectionError(CLIENT_ERRORS.FAILED_CONNECT.format(error='Not connected'))
 
             # Ensure the message is a string
             if not isinstance(message, str):
-                raise ValueError("Message must be a string")
+                raise ValueError(CLIENT_ERRORS.INVALID_INPUT)
     
             self.reset_parameters()  # Reset parameters for new message
 
             # Fragment the message into chunks based on max_fragment_size
             fragments = self.fragment_message(message)
-            print(f"[LOG] Message fragmented into {len(fragments)} chunks of max size {self.max_fragment_size}")
+            print(CLIENT_LOGS.MESSAGE_FRAGMENTED.format(num_chunks=len(fragments), max_fragment_size=self.max_fragment_size))
             
             # Send each fragment and handle ACK/NACK
             for seq_num, fragment in enumerate(fragments):
@@ -154,34 +155,34 @@ class Client(NetworkDevice):
                         last_packet = True
 
                     # Create packet with sequence number and checksum
-                    data_packet = self.create_packet(DATA_TYPE, encoded_message, sequence_num=seq_num, last_packet=last_packet)
-                    print(f"[LOG] Sending fragment {seq_num+1}/{len(fragments)}: '{fragment}' (seq={seq_num})")
+                    data_packet = self.create_packet(settings.DATA_TYPE, encoded_message, sequence_num=seq_num, last_packet=last_packet)
+                    print(CLIENT_LOGS.SENDING_FRAGMENT.format(current=seq_num+1, total=len(fragments), fragment=fragment, seq_num=seq_num))
                     self._socket.sendall(data_packet)
     
                     # Wait for ACK or NACK
                     response_packet = self._socket.recv(self.BUFFER_SIZE)
                     if not response_packet:
-                        raise ConnectionError("No response received")
+                        raise ConnectionError(CLIENT_ERRORS.NO_RESPONSE)
     
                     parsed = self.parse_packet(response_packet)
                     if not parsed:
-                        raise ValueError("Invalid response from server")
+                        raise ValueError(CLIENT_ERRORS.INVALID_RESPONSE)
     
-                    if parsed['type'] == ACK_TYPE and parsed['sequence'] == seq_num:
-                        print(f"[LOG] Server acknowledged fragment {seq_num}")
+                    if parsed['type'] == settings.ACK_TYPE and parsed['sequence'] == seq_num:
+                        print(CLIENT_LOGS.SERVER_ACK.format(seq_num=seq_num))
                         break  # Move to the next fragment
-                    elif parsed['type'] == NACK_TYPE and parsed['sequence'] == seq_num:
-                        print(f"[LOG] Server requested retransmission for fragment {seq_num}")
+                    elif parsed['type'] == settings.NACK_TYPE and parsed['sequence'] == seq_num:
+                        print(CLIENT_LOGS.SERVER_NACK.format(seq_num=seq_num))
                         continue  # Retransmit the current fragment
                     else:
-                        print(f"[ERROR] Unexpected response from server: {parsed}")
-                        raise ValueError("Unexpected response from server")
+                        print(CLIENT_ERRORS.UNEXPECTED_RESPONSE.format(parsed=parsed))
+                        raise ValueError(CLIENT_ERRORS.UNEXPECTED_RESPONSE.format(parsed=parsed))
             
-            print(f"[LOG] Message sent successfully in {len(fragments)} fragments")
+            print(CLIENT_LOGS.MESSAGE_SENT.format(num_fragments=len(fragments)))
             return True
         except Exception as e:
-            print(f"[ERROR] Failed to send message: {e}")
-            self.is_connected=False
+            print(CLIENT_ERRORS.FAILED_SEND.format(error=e))
+            self.is_connected = False
 
             # Set the socket back to blocking mode in case of error
             if self._socket:
@@ -222,24 +223,24 @@ class Client(NetworkDevice):
                 if not parsed:
                     continue
                 
-                if parsed['type'] == ACK_TYPE:
+                if parsed['type'] == settings.ACK_TYPE:
                     self.handle_ack(parsed)
-                elif parsed['type'] == NACK_TYPE:
+                elif parsed['type'] == settings.NACK_TYPE:
                     self.handle_nack(parsed)
         
         except BlockingIOError:
             # No more data to read, this is expected
             pass
         except Exception as e:
-            print(f"[ERROR] Error receiving ACK: {e}")
-    
+            print(CLIENT_ERRORS.ERROR_RECEIVING_ACK.format(error=e))
+
     def handle_ack(self, parsed):
         """Process an acknowledgment packet"""
         ack_seq = parsed.get('sequence', 0)
         
         if self.protocol == 'gbn':
             # Go-Back-N: Move the base forward
-            print(f"[LOG] Received ACK for sequence {ack_seq}")
+            print(CLIENT_LOGS.RECEIVED_ACK.format(ack_seq=ack_seq))
             
             if ack_seq < self.base_seq_num:
                 # Duplicate or old ACK, ignore
@@ -255,11 +256,11 @@ class Client(NetworkDevice):
                     del self.packet_buffer[seq]
             
             # Display window update
-            print(f"[WINDOW] Window moved: [{old_base}-{old_base + self.window_size - 1}] → [{self.base_seq_num}-{self.base_seq_num + self.window_size - 1}]")
+            print(CLIENT_LOGS.WINDOW_MOVED.format(old_base=old_base, old_end=old_base + self.window_size - 1, new_base=self.base_seq_num, new_end=self.base_seq_num + self.window_size - 1))
             return
             
         # Selective Repeat: Mark the specific packet as acknowledged
-        print(f"[LOG] Received ACK for sequence {ack_seq}")
+        print(CLIENT_LOGS.RECEIVED_ACK.format(ack_seq=ack_seq))
         
         # Mark this packet as acknowledged
         self.ack_received.add(ack_seq)
@@ -275,26 +276,26 @@ class Client(NetworkDevice):
         
         # Display window update if it moved
         if old_base != self.base_seq_num:
-            print(f"[WINDOW] Window moved: [{old_base}-{old_base + self.window_size - 1}] → [{self.base_seq_num}-{self.base_seq_num + self.window_size - 1}]")
-    
+            print(CLIENT_LOGS.WINDOW_MOVED.format(old_base=old_base, old_end=old_base + self.window_size - 1, new_base=self.base_seq_num, new_end=self.base_seq_num + self.window_size - 1))
+
     def handle_nack(self, parsed):
         """Process a negative acknowledgment packet"""
         nack_seq = parsed.get('sequence', 0)
         
         if self.protocol == 'gbn':
             # Go-Back-N: Resend all packets from base to next_seq_num - 1
-            print("[LOG] Received NACK, resending window")
+            print(CLIENT_LOGS.RECEIVED_NACK.format(nack_seq=nack_seq))
             for seq in range(self.base_seq_num, self.next_seq_num):
                 if seq in self.packet_buffer:
-                    print(f"[LOG] Resending packet {seq}")
+                    print(CLIENT_LOGS.RESENDING_PACKET.format(seq=seq))
                     self._socket.sendall(self.packet_buffer[seq])
             return
             
         # Selective Repeat: Resend only the NACKed packet
-        print(f"[LOG] Received NACK for sequence {nack_seq}")
+        print(CLIENT_LOGS.RECEIVED_NACK.format(nack_seq=nack_seq))
         
         if nack_seq in self.packet_buffer:
-            print(f"[LOG] Resending packet {nack_seq}")
+            print(CLIENT_LOGS.RESENDING_PACKET.format(seq=nack_seq))
             self._socket.sendall(self.packet_buffer[nack_seq])
 
     def disconnect(self):
@@ -303,25 +304,25 @@ class Client(NetworkDevice):
             if not self._socket:
                 return
 
-            print("[LOG] Initiating disconnection...")
+            print(CLIENT_LOGS.INIT_DISCONNECT)
             # Send disconnect request
-            disconnect_packet = self.create_packet(DISCONNECT_TYPE, "Disconnect")
+            disconnect_packet = self.create_packet(settings.DISCONNECT_TYPE, "Disconnect")
             self._socket.sendall(disconnect_packet)
 
             # Wait for acknowledgment
-            print("[LOG] Waiting for server acknowledgment...")
+            print(CLIENT_LOGS.WAIT_DISCONNECT_ACK)
             self._socket.settimeout(2.0)
             response_packet = self._socket.recv(self.BUFFER_SIZE)
 
             if not response_packet:
-                raise ConnectionError("Server did not respond to disconnect request")
+                raise ConnectionError(CLIENT_ERRORS.NO_RESPONSE)
 
-            print("[LOG] Server acknowledged disconnect. Closing socket...")
+            print(CLIENT_LOGS.SERVER_DISCONNECT_ACK)
             self._socket.close()
             self.handshake_complete = False
-            print("[LOG] Disconnected successfully.")
+            print(CLIENT_LOGS.DISCONNECTED)
         except Exception as e:
-            print(f"[ERROR] Failed to disconnect: {e}")
+            print(CLIENT_ERRORS.FAILED_DISCONNECT.format(error=e))
 
 if __name__ == '__main__':
     try:
@@ -347,7 +348,7 @@ if __name__ == '__main__':
         )
 
         # Create terminal UI and run interactive session
-        from terminal_ui import TerminalUI
+        from src.terminal_ui import TerminalUI
         terminal = TerminalUI(client)
         terminal.run_interactive_session()
     except KeyboardInterrupt:
