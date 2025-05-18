@@ -14,7 +14,7 @@ class Client(NetworkDevice):
         # Client-specific attributes
         self.handshake_complete = False
         self.session_id = None
-        
+        self.is_connected = False
         # Sliding window buffers
         self.packet_buffer = {}  # Store packets that have been sent but not acknowledged
         self.ack_received = set()  # Keep track of which packets have been acknowledged
@@ -25,18 +25,18 @@ class Client(NetworkDevice):
         # Simulation mode - for deterministic outcomes
         self.simulation_mode = "normal"  # Options: normal, loss, corruption, delay
         
-    def display_sliding_window(self):
-        """Display the current sliding window status"""
-        if self.protocol == 'gbn':
-            # For GBN, window is [base, next_seq_num-1]
-            window_start = self.base_seq_num
-            window_end = window_start + self.window_size - 1
-            print(f"[WINDOW] GBN Window: [{window_start}-{window_end}]")
-            # Show which sequences are in flight
-            in_flight = list(range(self.base_seq_num, self.next_seq_num))
-            if in_flight:
-                print(f"[WINDOW] In-flight packets: {in_flight}")
-            return
+    # def display_sliding_window(self):
+    #     """Display the current sliding window status"""
+    #     if self.protocol == 'gbn':
+    #         # For GBN, window is [base, next_seq_num-1]
+    #         window_start = self.base_seq_num
+    #         window_end = window_start + self.window_size - 1
+    #         print(f"[WINDOW] GBN Window: [{window_start}-{window_end}]")
+    #         # Show which sequences are in flight
+    #         in_flight = list(range(self.base_seq_num, self.next_seq_num))
+    #         if in_flight:
+    #             print(f"[WINDOW] In-flight packets: {in_flight}")
+    #         return
         
         # For SR, window also includes base and window size
         window_start = self.base_seq_num
@@ -100,6 +100,7 @@ class Client(NetworkDevice):
             self.handle_packet(HANDSHAKE_ACK_TYPE, json.dumps(ack_data))
 
             self.handshake_complete = True
+            self.is_connected = True
             print("[LOG] Handshake completed successfully!")
             print(f"[LOG] Connection established with protocol={self.protocol}, max_fragment_size={self.max_fragment_size}, window_size={self.window_size}")
             return True
@@ -159,12 +160,14 @@ class Client(NetworkDevice):
             for seq_num, fragment in enumerate(fragments):
                 while True:
                     encoded_message = fragment.encode('utf-8')
-    
-                    # Calculate checksum
-                    checksum = self.calculate_checksum(encoded_message)
-    
+                    
+                    last_packet = False
+
+                    if seq_num == len(fragments) - 1:
+                        last_packet = True
+
                     # Create packet with sequence number and checksum
-                    data_packet = self.create_packet(DATA_TYPE, encoded_message, sequence_num=seq_num, checksum=checksum)
+                    data_packet = self.create_packet(DATA_TYPE, encoded_message, sequence_num=seq_num, last_packet=last_packet)
                     print(f"[LOG] Sending fragment {seq_num+1}/{len(fragments)}: '{fragment}' (seq={seq_num})")
                     self._socket.sendall(data_packet)
     
@@ -191,6 +194,8 @@ class Client(NetworkDevice):
             return True
         except Exception as e:
             print(f"[ERROR] Failed to send message: {e}")
+            self.is_connected=False
+
             # Set the socket back to blocking mode in case of error
             if self._socket:
                 try:
@@ -217,63 +222,65 @@ class Client(NetworkDevice):
             fragments.append(fragment)
         return fragments
 
-    def execute_sliding_window(self, fragments):
-        """Execute the sliding window protocol to send message fragments"""
-        # Start with the initial time for timeout tracking
-        last_action_time = time.time()
+    # def execute_sliding_window(self, fragments):
+    #     """Execute the sliding window protocol to send message fragments"""
+    #     # Start with the initial time for timeout tracking
+    #     last_action_time = time.time()
         
-        # Continue until all fragments are acknowledged
-        while self.base_seq_num < len(fragments):
-            # Check if maximum retries exceeded
-            if self.retry_count > self.max_retries:
-                print(f"[ERROR] Failed to send message after {self.max_retries} attempts")
-                return False
+    #     # Continue until all fragments are acknowledged
+    #     while self.base_seq_num < len(fragments):
+    #         # Check if maximum retries exceeded
+    #         if self.retry_count > self.max_retries:
+    #             print(f"[ERROR] Failed to send message after {self.max_retries} attempts")
+    #             return False
             
-            # Display current sliding window
-            self.display_sliding_window()
+    #         # Display current sliding window
+    #         self.display_sliding_window()
             
-            # Send packets within the window
-            self.send_packets_in_window(fragments)
+    #         # Send packets within the window
+    #         self.send_packets_in_window(fragments)
             
-            # Try to receive ACKs (non-blocking)
-            self.process_acks()
+    #         # Try to receive ACKs (non-blocking)
+    #         self.process_acks()
             
-            # Check for timeout - if no action has occurred for the timeout period
-            if time.time() - last_action_time > self.timeout and self.base_seq_num < self.next_seq_num:
-                self.handle_timeout()
-                last_action_time = time.time()  # Reset after handling timeout
+    #         # Check for timeout - if no action has occurred for the timeout period
+    #         if time.time() - last_action_time > self.timeout and self.base_seq_num < self.next_seq_num:
+    #             self.handle_timeout()
+    #             last_action_time = time.time()  # Reset after handling timeout
                 
-                # Break out of the loop if max retries exceeded after timeout
-                if self.retry_count > self.max_retries:
-                    print(f"[ERROR] Maximum retries ({self.max_retries}) exceeded after timeout. Aborting message send.")
-                    return False
+    #             # Break out of the loop if max retries exceeded after timeout
+    #             if self.retry_count > self.max_retries:
+    #                 print(f"[ERROR] Maximum retries ({self.max_retries}) exceeded after timeout. Aborting message send.")
+    #                 return False
             
-            # Small delay to prevent CPU hogging
-            time.sleep(0.01)
+    #         # Small delay to prevent CPU hogging
+    #         time.sleep(0.01)
         
-        # If we reached here, all fragments were successfully sent and acknowledged
-        return self.retry_count <= self.max_retries
+    #     # If we reached here, all fragments were successfully sent and acknowledged
+    #     return self.retry_count <= self.max_retries
 
-    def send_packets_in_window(self, fragments):
-        """Send packets that fit within the current window"""
-        while self.next_seq_num < len(fragments) and self.next_seq_num < self.base_seq_num + self.window_size:
-            fragment = fragments[self.next_seq_num]
-            encoded_message = fragment.encode('utf-8')
+    # def send_packets_in_window(self, fragments):
+    #     """Send packets that fit within the current window"""
+    #     while self.next_seq_num < len(fragments) and self.next_seq_num < self.base_seq_num + self.window_size:
+    #         fragment = fragments[self.next_seq_num]
+    #         encoded_message = fragment.encode('utf-8')
             
-            # Calculate checksum
-            checksum = self.calculate_checksum(encoded_message)
             
-            # Create packet with sequence number and checksum
-            data_packet = self.create_packet(DATA_TYPE, encoded_message, sequence_num=self.next_seq_num, checksum=checksum)
+    #         # Create packet with sequence number and checksum
+    #         if self.next_seq_num  == len(fragments) - 1:
+    #             data_packet = self.create_packet(DATA_TYPE, encoded_message, sequence_num=self.next_seq_num, last_packet=True)
+    #         else:
+    #             data_packet = self.create_packet(DATA_TYPE, encoded_message, sequence_num=self.next_seq_num, last_packet=False)
+
+    #         # Store packet for potential retransmission
+    #         self.packet_buffer[self.next_seq_num] = data_packet
             
-            # Store packet for potential retransmission
-            self.packet_buffer[self.next_seq_num] = data_packet
+    #         print(f"[LOG] Sending fragment {self.next_seq_num+1}/{len(fragments)}: '{fragment}' (seq={self.next_seq_num})")
+
+    #         self._socket.sendall(data_packet)
             
-            print(f"[LOG] Sending fragment {self.next_seq_num+1}/{len(fragments)}: '{fragment}' (seq={self.next_seq_num})")
-            self._socket.sendall(data_packet)
-            
-            # Update next sequence number
-            self.next_seq_num += 1
+    #         # Update next sequence number
+    #         self.next_seq_num += 1
 
     def process_acks(self):
         """Helper method to process acknowledgments"""
@@ -387,11 +394,6 @@ class Client(NetworkDevice):
             print("[LOG] Disconnected successfully.")
         except Exception as e:
             print(f"[ERROR] Failed to disconnect: {e}")
-
-    def simulate_channel(self, data):
-        # Função removida: simulação de canal agora é feita apenas no servidor
-        raise NotImplementedError("A simulação de canal deve ser feita apenas no servidor.")
-
 
 if __name__ == '__main__':
     try:

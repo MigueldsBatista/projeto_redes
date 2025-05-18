@@ -1,1 +1,7 @@
 o cliente agora envia um campo especial 99 que vai indicar se o canal possui algum erro
+
+checksum agora foi colocado dentro da função create_packet para evitar implementações erradas
+
+se acontecer um erro o servidor encerra a conexão com o cliente, sendo necessário reconectar
+
+criamos uma classe channels conditions que passa os valores de erro para o cliente e servidor

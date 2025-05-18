@@ -41,43 +41,25 @@ class NetworkDevice:
         self.delay_time = 0.0
         
         self._socket:socket.socket #DO NOT ASSIGN HERE, IT WILL BE ASSIGNED IN THE CONNECT METHOD
+    def create_packet(self, message_type, payload, sequence_num=0, last_packet=False):
+        """Create a packet with header and payload, including last_packet flag as 1 byte."""
+        # Ensure payload is bytes
+        if isinstance(payload, str):
+            payload = payload.encode('utf-8')
+        payload_length = len(payload)
+        # Always calculate checksum here
+        
+        checksum = self.calculate_checksum(payload)
+
+        # Pack header: length (4 bytes) + type (1 byte) + seq (2 bytes) + checksum (4 bytes) + last_packet (1 byte)
+        header = struct.pack('!IBH4sB', payload_length, message_type, sequence_num, checksum, int(last_packet))
+        return header + payload
+
     def calculate_checksum(self, data):
-        """Calculate a checksum for the given data"""
-        # Return first 4 bytes of MD5 digest for consistent packet header checksum
+        """Calculate a checksum for the given data (used only for received packets)."""
         if isinstance(data, str):
             data = data.encode('utf-8')
         return hashlib.md5(data).digest()[:4]
-    
-    def create_packet(self, message_type, payload, sequence_num=0, checksum=None):
-        """Create a packet with header and payload"""
-        if isinstance(payload, str):
-            payload = payload.encode('utf-8')
-            
-        payload_length = len(payload)
-        
-        # Calculate the checksum if not provided
-        if checksum is None:
-            checksum = hashlib.md5(payload).digest()[:4]  # 4-byte checksum
-        elif not isinstance(checksum, bytes):
-            # Ensure checksum is bytes if it's not already
-            try:
-                if isinstance(checksum, int):
-                    checksum = checksum.to_bytes(4, byteorder='big')
-                else:
-                    checksum = bytes(checksum)
-                    # Pad to 4 bytes if needed
-                    if len(checksum) < 4:
-                        checksum = checksum + b'\x00' * (4 - len(checksum))
-                    # Truncate to 4 bytes if longer
-                    checksum = checksum[:4]
-            except (TypeError, ValueError):
-                print("[ERROR] Invalid checksum type, using MD5 instead")
-                checksum = hashlib.md5(payload).digest()[:4]
-        
-        # Pack header: length (4 bytes) + type (1 byte) + seq (2 bytes) + checksum (4 bytes)
-        header = struct.pack('!IBH4s', payload_length, message_type, sequence_num, checksum)
-        
-        return header + payload
     
     def handle_packet(self, data_type, payload: str):
         """Create and send a packet with the given data type and payload"""
@@ -112,26 +94,24 @@ class NetworkDevice:
 
     def handle_client_messages(self, client_socket: socket.socket, client_address: str):
         """Continuously receive and process messages from a connected client."""
+        received_fragments = []  # Store received fragments for message reconstruction
         attempts = 0
         while client_address in self.client_sessions:
             try:
 
-                if attempts >= 5:
-                    print("[ERROR] Max attempt number reached, ending program execution")
+                if attempts > MAX_RETRIES:
+                    print("[ERROR] Max attempts number reached, ending program execution...")
                     break
 
-                if attempts > 0:
-                    print(f"[INFO] Attempt number {attempts}")
-
                 # Receive header
-                header = client_socket.recv(self.HEADER_SIZE)
-                if not header or len(header) < self.HEADER_SIZE:
+                header = client_socket.recv(self.HEADER_SIZE + 1)  # header is now 12 bytes
+                if not header or len(header) < self.HEADER_SIZE + 1:
                     print(f"[ERROR] Incomplete or missing header from {client_address}")
                     break
 
                 # Parse header
                 try:
-                    payload_length, message_type, sequence_num, checksum = struct.unpack('!IBH4s', header)
+                    payload_length, message_type, sequence_num, checksum, last_packet = struct.unpack('!IBH4sB', header)
                 except struct.error     as e:
                     print(f"[ERROR] Failed to unpack header from {client_address}: {e}")
                     break
@@ -179,16 +159,23 @@ class NetworkDevice:
                 # Process message based on type
                 if message_type == DATA_TYPE:
                     try:
-                        decoded_message = processed_payload.decode('utf-8')
-                        print(f"[LOG] Received message from {client_address}: {decoded_message}")
-                    except UnicodeDecodeError:
-                        print(f"[LOG] Received binary data from {client_address}: {len(processed_payload)} bytes")
-
-                    # Send ACK for valid packet
+                        decoded_message = self.simulate_channel(payload, sequence_num).decode('utf-8')
+                        print(f"[LOG] Received message fragment from {client_address}: {decoded_message}")
+                        received_fragments.append(decoded_message)
+                    except Exception:
+                        print(f"[LOG] Received binary data from {client_address}: {len(payload)} bytes")
+                        received_fragments.append(payload)
                     ack_packet = self.create_packet(ACK_TYPE, f"ACK for seq {sequence_num}", sequence_num=sequence_num)
                     client_socket.sendall(ack_packet)
                     print(f"[LOG] Sent ACK for sequence {sequence_num}")
-                    attempts=0
+                    attempts = 0
+                    if last_packet:
+                        if all(isinstance(frag, str) for frag in received_fragments):
+                            full_message = ''.join(received_fragments)
+                            print(f"[RECONSTRUCTED] Full message from {client_address}: {full_message}")
+                        else:
+                            print(f"[RECONSTRUCTED] Received binary fragments from {client_address} (not shown as text)")
+                        break
                 elif message_type == DISCONNECT_TYPE:
                     if self.handle_disconnect(client_socket, client_address):
                         print(f"[LOG] Client {client_address} disconnected successfully.")
@@ -204,6 +191,8 @@ class NetworkDevice:
                 print(f"[ERROR] Error handling messages from {client_address}: {e}")
                 break
 
+
+
         # Clean up session
         if client_address in self.client_sessions:
             del self.client_sessions[client_address]
@@ -216,26 +205,27 @@ class NetworkDevice:
         
     def parse_packet(self, packet):
         """Parse a received packet into its components"""
-        # Check if packet is at least as long as the header
-        if len(packet) < self.HEADER_SIZE:
-            print(f"[ERROR] Received packet too small: {len(packet)} bytes, expected at least {self.HEADER_SIZE} bytes")
+        # Check if packet is at least as long as the header (now 12 bytes)
+        header_size = self.HEADER_SIZE + 1  # 11 + 1 for last_packet
+        if len(packet) < header_size:
+            print(f"[ERROR] Received packet too small: {len(packet)} bytes, expected at least {header_size} bytes")
             return None
         
-        # Extract header (11 bytes total)
-        header = packet[:self.HEADER_SIZE]
+        # Extract header (12 bytes total)
+        header = packet[:header_size]
         
-        payload_length, message_type, sequence_num, checksum = struct.unpack('!IBH4s', header)
+        payload_length, message_type, sequence_num, checksum, last_packet = struct.unpack('!IBH4sB', header)
         
         # Check if we have enough data for the payload
-        if len(packet) < self.HEADER_SIZE + payload_length:
-            print(f"[ERROR] Incomplete packet: expected {self.HEADER_SIZE + payload_length} bytes, got {len(packet)} bytes")
+        if len(packet) < header_size + payload_length:
+            print(f"[ERROR] Incomplete packet: expected {header_size + payload_length} bytes, got {len(packet)} bytes")
             return None
         
         # Extract payload
-        payload = packet[self.HEADER_SIZE:self.HEADER_SIZE+payload_length]
+        payload = packet[header_size:header_size+payload_length]
         
         # Verify checksum
-        calculated_checksum = hashlib.md5(payload).digest()[:4]
+        calculated_checksum = self.calculate_checksum(payload)
         if calculated_checksum != checksum:
             print("[ERROR] Checksum verification failed!")
             return None
@@ -244,7 +234,8 @@ class NetworkDevice:
             'type': message_type,
             'sequence': sequence_num,
             'payload': payload,
-            'length': payload_length
+            'length': payload_length,
+            'last_packet': bool(last_packet)
         }
 
     def set_channel_conditions(self, loss_prob=0.0, corruption_prob=0.0, delay_prob=0.0, delay_time=0.0):

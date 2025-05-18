@@ -38,7 +38,7 @@ class TerminalUI:
                 self.configure_simulation_menu()
             elif choice == '4':
                 self.show_status()
-                xinput("\nPress Enter to continue...")
+                input("\nPress Enter to continue...")
             elif choice == '5':
                 self.reset_simulation()
                 input("\nSimulation reset to normal mode. Press Enter to continue...")
@@ -215,7 +215,7 @@ class TerminalUI:
         print(f"Delay time: {self.client.delay_time:.2f}s")
 
         print("\n===== CONNECTION STATUS =====")
-        print(f"Connected: {'Yes' if self.client.handshake_complete else 'No'}")
+        print(f"Connected: {'Yes' if self.client.is_connected else 'No'}")
         print(f"Server address: {self.client.server_addr}:{self.client.server_port}")
         print(f"Session ID: {self.client.session_id if self.client.session_id else 'N/A'}")
 
@@ -223,6 +223,8 @@ class TerminalUI:
         """Reset simulation to normal mode"""
         self.client.simulation_mode = "normal"
         self.client.set_channel_conditions(0.0, 0.0, 0.0, 0.0)
+        self.client.connect()
+        self.clear_screen()
         print("[CONFIG] Simulation reset to normal mode")
 
 
