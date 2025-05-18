@@ -10,8 +10,8 @@ class CLIENT_LOGS:
     CONNECTION_ESTABLISHED = '[LOG] Connection established with protocol={protocol}, max_fragment_size={max_fragment_size}, window_size={window_size}'
     MESSAGE_FRAGMENTED = '[LOG] Message fragmented into {num_chunks} chunks of max size {max_fragment_size}'
     SENDING_FRAGMENT = "[LOG] Sending fragment {current}/{total}: '{fragment}' (seq={seq_num})"
-    SERVER_ACK_RECEIVED = '[LOG] Received ACK from server for fragment {seq_num}'
-    SERVER_NACK_RECEIVED = '[LOG] Received NACK from server requesting retransmission of fragment {seq_num}'
+    SERVER_ACK = '[LOG] Received ACK from server for fragment {seq_num}'
+    SERVER_NACK = '[LOG] Received NACK from server requesting retransmission of fragment {seq_num}'
     MESSAGE_SENT = '[LOG] Message sent successfully in {num_fragments} fragments'
     RECEIVED_ACK = '[LOG] Received ACK for sequence {ack_seq}'
     WINDOW_MOVED = '[WINDOW] Window moved: [{old_base}-{old_end}] → [{new_base}-{new_end}]'
