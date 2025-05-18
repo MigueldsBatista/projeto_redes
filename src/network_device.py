@@ -122,24 +122,26 @@ class NetworkDevice:
                     print(f"[ERROR] Incomplete payload received from {client_address}")
                     break
 
-                # Handle special channel config packet (message_type 99)
+            # Handle special channel config packet (message_type 99)
+                try:
+                    config = json.loads(payload.decode('utf-8'))
+                    print(f"[CONFIG] Received channel config from client: {config}")
+                    self.set_channel_conditions(
+                        loss_prob=float(config.get('loss_prob', 0.0)),
+                        corruption_prob=float(config.get('corruption_prob', 0.0)),
+                        delay_prob=float(config.get('delay_prob', 0.0)),
+                        delay_time=float(config.get('delay_time', 0.0))
+                    )
+                    print("[CONFIG] Channel conditions updated on server.")
+                except Exception as e:
+                    print(f"[ERROR] Failed to parse channel config: {e}")
+
                 if message_type == ERROR_CODE:
-                    try:
-                        config = json.loads(payload.decode('utf-8'))
-                        print(f"[CONFIG] Received channel config from client: {config}")
-                        self.set_channel_conditions(
-                            loss_prob=float(config.get('loss_prob', 0.0)),
-                            corruption_prob=float(config.get('corruption_prob', 0.0)),
-                            delay_prob=float(config.get('delay_prob', 0.0)),
-                            delay_time=float(config.get('delay_time', 0.0))
-                        )
-                        print("[CONFIG] Channel conditions updated on server.")
-                    except Exception as e:
-                        print(f"[ERROR] Failed to parse channel config: {e}")
                     continue
 
                 # Simulate channel conditions
                 processed_payload = self.simulate_channel(payload, sequence_num)
+                
                 if processed_payload is None:
                     print(f"[CHANNEL] Packet from {client_address} lost in simulated channel.")
                     if hasattr(self, 'simulate_loss_and_nack'):
@@ -169,13 +171,16 @@ class NetworkDevice:
                     client_socket.sendall(ack_packet)
                     print(f"[LOG] Sent ACK for sequence {sequence_num}")
                     attempts = 0
+                    
                     if last_packet:
                         if all(isinstance(frag, str) for frag in received_fragments):
                             full_message = ''.join(received_fragments)
                             print(f"[RECONSTRUCTED] Full message from {client_address}: {full_message}")
                         else:
                             print(f"[RECONSTRUCTED] Received binary fragments from {client_address} (not shown as text)")
-                        break
+
+                        received_fragments = []
+
                 elif message_type == DISCONNECT_TYPE:
                     if self.handle_disconnect(client_socket, client_address):
                         print(f"[LOG] Client {client_address} disconnected successfully.")

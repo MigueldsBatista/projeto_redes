@@ -3,6 +3,7 @@ from client import Client
 # Remove the direct import from server
 from typing import TYPE_CHECKING
 import json
+from settings import *
 # Use conditional imports to prevent circular dependencies
 if TYPE_CHECKING:
     from server import Server
@@ -188,8 +189,9 @@ class TerminalUI:
                 'delay_time': delay_time
             }
             # Use a reserved message type, e.g., 99
-            config_packet = self.client.create_packet(99, json.dumps(config_data))
+            config_packet = self.client.create_packet(ERROR_CODE, json.dumps(config_data))
             self.client._socket.sendall(config_packet)
+
             print("[CONFIG] Channel configuration sent to server.")
         except Exception as e:
             print(f"[ERROR] Failed to send channel config to server: {e}")
@@ -222,8 +224,26 @@ class TerminalUI:
     def reset_simulation(self):
         """Reset simulation to normal mode"""
         self.client.simulation_mode = "normal"
-        self.client.set_channel_conditions(0.0, 0.0, 0.0, 0.0)
+        loss_prob = 0
+        corruption_prob = 0
+        delay_prob = 0
+        delay_time = 0
+
+        self.client.set_channel_conditions(loss_prob, corruption_prob, delay_prob, delay_time)
+
         self.client.connect()
+        
+        config_data = {
+            'type': 'channel_config',
+            'loss_prob': loss_prob,
+            'corruption_prob': corruption_prob,
+            'delay_prob': delay_prob,
+            'delay_time': delay_time
+        }
+        # Use the reserved config message type, not DATA_TYPE, and do not set last_packet
+        config_packet = self.client.create_packet(ERROR_CODE, json.dumps(config_data))
+        self.client._socket.sendall(config_packet)
+
         self.clear_screen()
         print("[CONFIG] Simulation reset to normal mode")
 

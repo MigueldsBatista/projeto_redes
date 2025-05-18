@@ -8,4 +8,5 @@ DISCONNECT_TYPE = 0x06     # Disconnect message
 GBN = 0  # Go-Back-N
 SR = 1   # Selective Repeat
 ERROR_CODE = 99
+
 MAX_RETRIES = 5
