@@ -5,12 +5,13 @@ import json
 from src.network_device import NetworkDevice
 from src.core import settings
 from src.constants.constants_server import SERVER_LOGS, SERVER_ERRORS
+from src.core.settings import DEFAULT_PORT
 
 # We'll remove the direct import of ServerTerminalUI to avoid circular dependencies
 
 
 class Server(NetworkDevice):
-    def __init__(self, host='127.0.0.1', port=5000, protocol='gbn', max_fragment_size=3, window_size=4):
+    def __init__(self, host='127.0.0.1', port=DEFAULT_PORT, protocol='gbn', max_fragment_size=3, window_size=4):
         super().__init__(host, port, protocol, max_fragment_size, window_size)
         self.host = host
         self.port = port
@@ -143,7 +144,7 @@ if __name__ == '__main__':
         # Parse command line arguments
         parser = argparse.ArgumentParser(description='Custom Protocol Server')
         parser.add_argument('--host', default='0.0.0.0', help='Host address to bind')
-        parser.add_argument('--port', type=int, default=5000, help='Port to listen on')
+        parser.add_argument('--port', type=int, default=DEFAULT_PORT, help='Port to listen on')
         parser.add_argument('--max-fragment-size', type=int, default=3, help='Maximum fragment size')
         parser.add_argument('--protocol', choices=['gbn', 'sr'], default='gbn',
                             help='Reliable transfer protocol (Go-Back-N or Selective Repeat)')

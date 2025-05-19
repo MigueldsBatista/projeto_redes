@@ -10,3 +10,4 @@ SR = 1   # Selective Repeat
 ERROR_CODE = 99
 
 MAX_RETRIES = 5
+DEFAULT_PORT = 5000 # se a porta padrao tiver ocupada mude pra outra da sua preferencia

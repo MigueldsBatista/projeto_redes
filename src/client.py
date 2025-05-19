@@ -5,10 +5,11 @@ import time
 from src.network_device import NetworkDevice
 from src.core import settings
 from src.constants.constants_client import CLIENT_LOGS, CLIENT_ERRORS
+from src.core.settings import DEFAULT_PORT
 
 #ultimo teste de vez
 class Client(NetworkDevice):
-    def __init__(self, server_addr='127.0.0.1', server_port=5000, protocol='gbn', max_fragment_size=3, window_size=4):
+    def __init__(self, server_addr='127.0.0.1', server_port=DEFAULT_PORT, protocol='gbn', max_fragment_size=3, window_size=4):
         # Call parent constructor with the new parameter name
         super().__init__(server_addr, server_port, protocol, max_fragment_size, window_size)
         
@@ -244,7 +245,7 @@ if __name__ == '__main__':
         # Parse command line arguments
         parser = argparse.ArgumentParser(description='Custom Protocol Client')
         parser.add_argument('--host', default='127.0.0.1', help='Server address')
-        parser.add_argument('--port', type=int, default=5000, help='Server port')
+        parser.add_argument('--port', type=int, default=DEFAULT_PORT, help='Server port')
         parser.add_argument('--max-fragment-size', type=int, default=3, help='Maximum fragment size')
         parser.add_argument('--protocol', choices=['gbn', 'sr'], default='gbn', 
                            help='Reliable transfer protocol (Go-Back-N or Selective Repeat)')
